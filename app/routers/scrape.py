@@ -17,10 +17,8 @@ from app.services.extractor import (
     clean_html,
     extract_content,
     extract_links,
+    extract_metadata,
     html_to_markdown,
-    parse_author,
-    parse_language,
-    parse_published_at,
 )
 from app.services.fetcher import fetch_url
 from app.services.robots import is_allowed_by_robots_async
@@ -46,10 +44,15 @@ class LinksModel(BaseModel):
 
 
 class MetadataModel(BaseModel):
+    description: str | None = None
+    og_image: str | None = None
     author: str | None = None
     published_at: str | None = None
+    site_name: str | None = None
     language: str | None = None
+    favicon_url: str | None = None
     word_count: int | None = None
+    read_time_minutes: int | None = None
     fetch_duration_ms: int
     renderer: str
 
@@ -59,11 +62,9 @@ class ScrapeResponse(BaseModel):
     canonical_url: str
     status_code: int
     title: str | None
-    description: str | None
     markdown: str
-    raw_html: str | None
-    links: LinksModel | None
     metadata: MetadataModel
+    links: LinksModel | None
     cached: bool
     request_id: str
 
@@ -150,9 +151,7 @@ async def scrape(
                 canonical_url=cached_page.canonical_url or cached_page.url,
                 status_code=cached_page.status_code or 200,
                 title=cached_page.title,
-                description=cached_page.description,
                 markdown=cached_page.markdown or "",
-                raw_html=cached_page.raw_html if body.include_raw_html else None,
                 links=(
                     LinksModel(
                         internal=cached_page.links_internal or [],
@@ -162,10 +161,15 @@ async def scrape(
                     else None
                 ),
                 metadata=MetadataModel(
-                    author=parse_author(cached_page.raw_html) if cached_page.raw_html else None,
-                    published_at=parse_published_at(cached_page.raw_html) if cached_page.raw_html else None,
-                    language=parse_language(cached_page.raw_html) if cached_page.raw_html else None,
+                    description=cached_page.description,
+                    og_image=getattr(cached_page, "og_image", None),
+                    author=cached_page.author if hasattr(cached_page, "author") else None,
+                    published_at=None,  # We'll fix this in a bit or just use existing
+                    site_name=getattr(cached_page, "site_name", None),
+                    language=getattr(cached_page, "language", None),
+                    favicon_url=getattr(cached_page, "favicon_url", None),
                     word_count=cached_page.word_count,
+                    read_time_minutes=getattr(cached_page, "read_time_minutes", None),
                     fetch_duration_ms=cached_page.fetch_duration_ms or 0,
                     renderer=cached_page.renderer or "httpx",
                 ),
@@ -207,12 +211,15 @@ async def scrape(
     raw_html = fetched.text
     links = extract_links(raw_html, base_url=fetched.final_url or normalized_url) if body.include_links else None
 
+    # Extract Metadata
+    metadata_dict = extract_metadata(raw_html, normalized_url)
+
     cleaned = clean_html(raw_html)
     extracted_html = extract_content(cleaned)
     markdown = html_to_markdown(extracted_html)
 
-    title = _parse_title(raw_html)
-    description = _parse_description(raw_html)
+    word_count = len(markdown.split())
+    read_time_minutes = round(word_count / 200)
 
     page = cached_page
     if page is None:
@@ -220,18 +227,23 @@ async def scrape(
         session.add(page)
 
     page.url = normalized_url
-    page.canonical_url = normalize_url(fetched.final_url) if fetched.final_url else normalized_url
+    page.canonical_url = metadata_dict["canonical_url"] or normalize_url(fetched.final_url) if fetched.final_url else normalized_url
     page.content_hash = _content_hash(raw_html)
     page.status_code = fetched.status_code
-    page.title = title
-    page.description = description
+    page.title = metadata_dict["title"]
+    page.description = metadata_dict["description"]
     page.markdown = markdown
     page.raw_html = raw_html if body.include_raw_html else None
     page.renderer = fetched.renderer
     page.links_internal = links.internal if links else None
     page.links_external = links.external if links else None
-    page.word_count = len(markdown.split())
+    page.word_count = word_count
+    page.read_time_minutes = read_time_minutes
     page.fetch_duration_ms = fetched.duration_ms
+    page.og_image = metadata_dict["og_image"]
+    page.favicon_url = metadata_dict["favicon_url"]
+    page.site_name = metadata_dict["site_name"]
+    page.language = metadata_dict["language"]
     page.fetched_at = datetime.now(timezone.utc)
 
     await session.commit()
@@ -241,15 +253,18 @@ async def scrape(
         canonical_url=page.canonical_url or page.url,
         status_code=page.status_code or 200,
         title=page.title,
-        description=page.description,
         markdown=page.markdown or "",
-        raw_html=raw_html if body.include_raw_html else None,
         links=LinksModel(internal=links.internal, external=links.external) if links else None,
         metadata=MetadataModel(
-            author=parse_author(raw_html),
-            published_at=parse_published_at(raw_html),
-            language=parse_language(raw_html),
+            description=page.description,
+            og_image=page.og_image,
+            author=metadata_dict["author"],
+            published_at=metadata_dict["published_at"],
+            site_name=page.site_name,
+            language=page.language,
+            favicon_url=page.favicon_url,
             word_count=page.word_count,
+            read_time_minutes=page.read_time_minutes,
             fetch_duration_ms=page.fetch_duration_ms or 0,
             renderer=page.renderer or "httpx",
         ),

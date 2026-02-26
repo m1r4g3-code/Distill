@@ -1,7 +1,7 @@
 import re
 import json
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from lxml import html
 from markdownify import markdownify as md
@@ -96,6 +96,56 @@ def parse_language(html_text: str) -> str | None:
     return None
 
 
+def extract_metadata(html_text: str, url: str) -> dict:
+    tree = html.fromstring(html_text)
+
+    def get_meta(property=None, name=None):
+        if property:
+            res = tree.xpath(f"//meta[@property='{property}']/@content")
+            if res:
+                return res[0].strip()
+        if name:
+            res = tree.xpath(f"//meta[@name='{name}']/@content")
+            if res:
+                return res[0].strip()
+        return None
+
+    title = get_meta(property="og:title") or tree.xpath("//title/text()")
+    if isinstance(title, list) and title:
+        title = title[0].strip()
+    elif not title:
+        title = None
+
+    description = get_meta(property="og:description", name="description")
+    image = get_meta(property="og:image")
+    author = get_meta(name="author")
+    published_at = get_meta(property="article:published_time")
+    site_name = get_meta(property="og:site_name")
+    language = parse_language(html_text)
+    canonical_url = tree.xpath("//link[@rel='canonical']/@href")
+    canonical_url = canonical_url[0].strip() if canonical_url else None
+
+    # Favicon extraction
+    favicon_url = tree.xpath("//link[@rel='icon']/@href") or tree.xpath("//link[@rel='shortcut icon']/@href")
+    if favicon_url:
+        favicon_url = urljoin(url, favicon_url[0].strip())
+    else:
+        parsed_url = urlparse(url)
+        favicon_url = f"{parsed_url.scheme}://{parsed_url.netloc}/favicon.ico"
+
+    return {
+        "title": title,
+        "description": description,
+        "og_image": image,
+        "author": author,
+        "published_at": published_at,
+        "site_name": site_name,
+        "language": language,
+        "canonical_url": canonical_url,
+        "favicon_url": favicon_url,
+    }
+
+
 def clean_html(raw_html: str) -> str:
     tree = html.fromstring(raw_html)
 
@@ -114,6 +164,18 @@ def clean_html(raw_html: str) -> str:
 
 
 def extract_content(cleaned_html: str) -> str:
+    # Detect tables before trafilatura
+    tree = html.fromstring(cleaned_html)
+    tables = tree.xpath("//table")
+    table_markdowns = []
+    for table in tables:
+        # Check if table has headers or looks like a data table
+        if table.xpath(".//th") or len(table.xpath(".//tr")) > 2:
+            table_html = html.tostring(table, encoding="unicode", method="html")
+            table_md = md(table_html, heading_style="ATX")
+            if "|" in table_md:  # Simple check if markdownify produced a table
+                table_markdowns.append(table_md)
+
     extracted = trafilatura.extract(
         cleaned_html,
         include_comments=False,
@@ -121,6 +183,8 @@ def extract_content(cleaned_html: str) -> str:
         output_format="xml",
     )
     if extracted and len(extracted) >= 100:
+        # If trafilatura stripped tables but we found them, we might need to re-insert or prefer another method
+        # For MVP2, if we have tables, let's also check if they are in the extracted text
         return extracted
 
     doc = Document(cleaned_html)
@@ -136,7 +200,65 @@ def html_to_markdown(extracted_html: str) -> str:
         convert_links=True,
     )
 
+    # Post-processing steps
+    # 1. Collapse 3+ consecutive blank lines into 2
     markdown = re.sub(r"\n{3,}", "\n\n", markdown)
-    lines = [ln.strip() for ln in markdown.splitlines()]
-    lines = [ln for ln in lines if ln and not re.fullmatch(r"[\W_]+", ln)]
-    return "\n".join(lines).strip()
+
+    lines = markdown.splitlines()
+    processed_lines = []
+    last_line = None
+    repeat_count = 0
+
+    # Patterns for cleaning
+    symbol_line_pattern = re.compile(r"^[ \t]*[\-\*\/\=\_\~\+\#\>\.]+ [ \t]*$")
+    breadcrumb_pattern = re.compile(r"^.*?\s*>\s*.*?\s*>\s*.*?$")
+    cookie_patterns = ["we use cookies", "accept all", "privacy policy", "cookie settings", "manage cookies"]
+
+    for line in lines:
+        stripped = line.strip()
+
+        # 2. Remove lines that contain only symbols or punctuation
+        if stripped and symbol_line_pattern.match(stripped):
+            continue
+
+        # 3. Remove lines that are only whitespace
+        if not stripped and not line:
+            processed_lines.append("")
+            continue
+        if not stripped:
+            continue
+
+        # 4. Strip cookie consent text patterns
+        lower_stripped = stripped.lower()
+        if any(p in lower_stripped for p in cookie_patterns) and len(stripped) < 100:
+            continue
+
+        # 5. Remove navigation breadcrumb patterns
+        if breadcrumb_pattern.match(stripped) and len(stripped) < 100:
+            continue
+
+        # 6. Strip repeated duplicate lines (same line appearing 3+ times in a row)
+        if stripped == last_line:
+            repeat_count += 1
+            if repeat_count >= 2:  # Already seen twice, this is the 3rd time
+                continue
+        else:
+            repeat_count = 0
+
+        # 7. Ensure all heading levels are properly spaced
+        if stripped.startswith("#"):
+            if processed_lines and processed_lines[-1] != "":
+                processed_lines.append("")
+            processed_lines.append(stripped)
+            processed_lines.append("")
+            last_line = stripped
+            continue
+
+        processed_lines.append(stripped)
+        last_line = stripped
+
+    # Join and final cleanup
+    markdown = "\n".join(processed_lines).strip()
+    markdown = re.sub(r"\n{3,}", "\n\n", markdown)
+
+    return markdown
