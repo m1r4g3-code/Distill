@@ -1,0 +1,39 @@
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(PROJECT_ROOT / ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    database_url: str = "postgresql+asyncpg://postgres:dev@localhost:5432/webextract"
+    secret_key: str = "change-me-32-chars-minimum"
+
+    cache_ttl_seconds: int = 3600
+
+    fetch_connect_timeout: float = 5.0
+    fetch_read_timeout: float = 20.0
+
+    playwright_timeout: float = 30.0
+
+    domain_delay_ms: int = 500
+
+    serper_api_key: str | None = None
+    gemini_api_key: str | None = None
+    search_timeout: float = 10.0
+
+    default_rate_limit: int = 60
+
+    log_level: str = "INFO"
+    app_env: str = "development"
+    app_version: str = "1.0.0"
+
+
+settings = Settings()

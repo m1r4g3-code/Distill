@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+app/___init___.py
+app/__init__.py
+app/config.py
+app/dependencies.py
+app/main.py
+webextract.egg-info/PKG-INFO
+webextract.egg-info/SOURCES.txt
+webextract.egg-info/dependency_links.txt
+webextract.egg-info/requires.txt
+webextract.egg-info/top_level.txt
