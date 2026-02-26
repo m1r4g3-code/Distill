@@ -62,15 +62,30 @@ async def fetch_httpx(url: str, timeout_ms: int) -> FetchResult:
     )
 
 
-def _is_probably_spa_shell(html_text: str) -> bool:
+def should_use_playwright(html_text: str) -> bool:
+    # 1. Check word count (lower threshold to 50 words)
+    # Strip HTML tags for a rough word count
+    text_content = re.sub(r"<[^>]+>", " ", html_text)
+    word_count = len(text_content.split())
+    
+    if word_count < 50:
+        return True
+        
+    # 2. Check for SPA shell markers
     lowered = html_text.lower()
-    markers = [
-        "<div id=\"root\"></div>",
-        "<div id=\"app\"></div>",
+    spa_markers = [
+        'id="root"',
+        'id="app"',
+        'id="__next"',
         "window.__next_data__",
         "window.__nuxt__",
+        "__remix_manifest",
     ]
-    return any(m in lowered for m in markers)
+    for marker in spa_markers:
+        if marker in lowered:
+            return True
+            
+    return False
 
 
 async def fetch_url(url: str, timeout_ms: int, use_playwright: str = "auto") -> FetchResult:
@@ -90,7 +105,7 @@ async def fetch_url(url: str, timeout_ms: int, use_playwright: str = "auto") -> 
     if "text/html" not in content_type:
         return fetched
 
-    if len(fetched.text) < 500 or _is_probably_spa_shell(fetched.text):
+    if should_use_playwright(fetched.text):
         from app.services.playwright_fetcher import fetch_playwright
 
         return await fetch_playwright(url, timeout_ms=timeout_ms)

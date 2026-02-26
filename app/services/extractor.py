@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
 from lxml import html
+from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 from readability import Document
 import trafilatura
@@ -96,6 +97,39 @@ def parse_language(html_text: str) -> str | None:
     return None
 
 
+def extract_title(html_text: str, og_data: dict) -> str | None:
+    # 1. Try OG title first
+    if og_data.get("title"):
+        return og_data["title"]
+    
+    # 2. Try <title> tag using BeautifulSoup
+    soup = BeautifulSoup(html_text, "lxml")
+    title_tag = soup.find("title")
+    if title_tag and title_tag.text.strip():
+        return title_tag.text.strip()
+    
+    # 3. Try first <h1>
+    h1 = soup.find("h1")
+    if h1 and h1.text.strip():
+        return h1.text.strip()
+    
+    return None
+
+
+def extract_tables_as_markdown(html_text: str) -> str:
+    soup = BeautifulSoup(html_text, "lxml")
+    # Look for wikitable class specifically for Wikipedia, but allow others too
+    tables = soup.find_all("table", class_=lambda c: c and ("wikitable" in c) or True)
+    table_md = []
+    for table in tables[:5]:  # max 5 tables
+        # Use markdownify to convert individual table
+        md_text = md(str(table), heading_style="ATX")
+        if "|" in md_text:  # Ensure it actually produced a table
+            table_md.append(md_text)
+    
+    return "\n\n".join(table_md)
+
+
 def extract_metadata(html_text: str, url: str) -> dict:
     tree = html.fromstring(html_text)
 
@@ -110,12 +144,8 @@ def extract_metadata(html_text: str, url: str) -> dict:
                 return res[0].strip()
         return None
 
-    title = get_meta(property="og:title") or tree.xpath("//title/text()")
-    if isinstance(title, list) and title:
-        title = title[0].strip()
-    elif not title:
-        title = None
-
+    og_title = get_meta(property="og:title")
+    
     description = get_meta(property="og:description", name="description")
     image = get_meta(property="og:image")
     author = get_meta(name="author")
@@ -133,8 +163,9 @@ def extract_metadata(html_text: str, url: str) -> dict:
         parsed_url = urlparse(url)
         favicon_url = f"{parsed_url.scheme}://{parsed_url.netloc}/favicon.ico"
 
-    return {
-        "title": title,
+    # Fix 1: Title fallback logic
+    meta_dict = {
+        "title": og_title,
         "description": description,
         "og_image": image,
         "author": author,
@@ -144,6 +175,10 @@ def extract_metadata(html_text: str, url: str) -> dict:
         "canonical_url": canonical_url,
         "favicon_url": favicon_url,
     }
+    
+    meta_dict["title"] = extract_title(html_text, meta_dict)
+    
+    return meta_dict
 
 
 def clean_html(raw_html: str) -> str:
@@ -163,18 +198,15 @@ def clean_html(raw_html: str) -> str:
     return html.tostring(tree, encoding="unicode", method="html")
 
 
-def extract_content(cleaned_html: str) -> str:
-    # Detect tables before trafilatura
-    tree = html.fromstring(cleaned_html)
-    tables = tree.xpath("//table")
-    table_markdowns = []
-    for table in tables:
-        # Check if table has headers or looks like a data table
-        if table.xpath(".//th") or len(table.xpath(".//tr")) > 2:
-            table_html = html.tostring(table, encoding="unicode", method="html")
-            table_md = md(table_html, heading_style="ATX")
-            if "|" in table_md:  # Simple check if markdownify produced a table
-                table_markdowns.append(table_md)
+@dataclass
+class ContentResult:
+    content: str
+    tables_md: str | None = None
+
+
+def extract_content(cleaned_html: str) -> ContentResult:
+    # Fix 2: Extract tables separately before trafilatura
+    tables_md = extract_tables_as_markdown(cleaned_html)
 
     extracted = trafilatura.extract(
         cleaned_html,
@@ -182,18 +214,17 @@ def extract_content(cleaned_html: str) -> str:
         include_tables=True,
         output_format="xml",
     )
+    
     if extracted and len(extracted) >= 100:
-        # If trafilatura stripped tables but we found them, we might need to re-insert or prefer another method
-        # For MVP2, if we have tables, let's also check if they are in the extracted text
-        return extracted
+        return ContentResult(content=extracted, tables_md=tables_md)
 
     doc = Document(cleaned_html)
-    return doc.summary(html_partial=True)
+    return ContentResult(content=doc.summary(html_partial=True), tables_md=tables_md)
 
 
-def html_to_markdown(extracted_html: str) -> str:
+def html_to_markdown(extracted: ContentResult) -> str:
     markdown = md(
-        extracted_html,
+        extracted.content,
         heading_style="ATX",
         bullets="-",
         strip=["script", "style", "nav", "footer", "header"],
@@ -259,6 +290,13 @@ def html_to_markdown(extracted_html: str) -> str:
 
     # Join and final cleanup
     markdown = "\n".join(processed_lines).strip()
+    
+    # Fix 2: Append tables at the end
+    if extracted.tables_md:
+        if markdown:
+            markdown += "\n\n"
+        markdown += extracted.tables_md
+
     markdown = re.sub(r"\n{3,}", "\n\n", markdown)
 
     return markdown

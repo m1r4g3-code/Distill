@@ -11,6 +11,7 @@ lxml>=5.1
 trafilatura>=1.8
 readability-lxml>=0.8.1
 markdownify>=0.12
+beautifulsoup4>=4.12
 playwright>=1.41
 google-generativeai>=0.4.0
 requests>=2.31

@@ -243,8 +243,8 @@ async def scrape(
     metadata_dict = extract_metadata(raw_html, normalized_url)
 
     cleaned = clean_html(raw_html)
-    extracted_html = extract_content(cleaned)
-    markdown = html_to_markdown(extracted_html)
+    content_result = extract_content(cleaned)
+    markdown = html_to_markdown(content_result)
 
     word_count = len(markdown.split())
     read_time_minutes = round(word_count / 200)

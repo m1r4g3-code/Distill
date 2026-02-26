@@ -21,7 +21,7 @@ def create_app() -> FastAPI:
             content={
                 "error": {
                     "code": "VALIDATION_ERROR",
-                    "message": "Invalid request parameters",
+                    "message": str(exc.errors()[0]["msg"]) if exc.errors() else "Invalid request",
                     "request_id": get_request_id(),
                     "details": exc.errors(),
                 }

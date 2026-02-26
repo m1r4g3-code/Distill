@@ -92,8 +92,8 @@ async def _scrape_for_search(url: str, respect_robots: bool = False) -> ScrapedM
         fetched = await fetch_url(normalized, timeout_ms=20000, use_playwright="auto")
         raw_html = fetched.text
         cleaned = clean_html(raw_html)
-        extracted_html = extract_content(cleaned)
-        markdown = html_to_markdown(extracted_html)
+        content_result = extract_content(cleaned)
+        markdown = html_to_markdown(content_result)
         return ScrapedModel(markdown=markdown, title=_parse_title(raw_html))
     except Exception:
         return None

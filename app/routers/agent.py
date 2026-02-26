@@ -117,8 +117,8 @@ async def agent_extract(
                 
                 # 2. Extract Markdown
                 cleaned = clean_html(fetched.text)
-                extracted_html = extract_content(cleaned)
-                markdown = html_to_markdown(extracted_html)
+                content_result = extract_content(cleaned)
+                markdown = html_to_markdown(content_result)
                 
                 # 3. LLM Extraction
                 structured_data = await extract_structured_data(markdown, prompt, schema)
