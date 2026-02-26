@@ -30,7 +30,7 @@ async def seed_api_key():
             id=uuid.uuid4(),
             key_hash=KEY_HASH,
             name="Integration Test Key",
-            scopes=["scrape", "map", "search"],
+            scopes=["scrape", "map", "search", "agent"],
             rate_limit=1000,
             is_active=True,
             created_at=datetime.now(timezone.utc)
