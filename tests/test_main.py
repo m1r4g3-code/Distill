@@ -29,6 +29,14 @@ def mock_fetch_url():
 # --- Tests ---
 
 @pytest.mark.asyncio
+async def test_health_check():
+    """Test that the health check endpoint is accessible."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "message": "Scraper is running"}
+
+@pytest.mark.asyncio
 async def test_read_docs():
     """Test that the API documentation is accessible."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
