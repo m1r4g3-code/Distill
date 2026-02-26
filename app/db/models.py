@@ -93,7 +93,7 @@ class Job(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
-        CheckConstraint("type IN ('map','agent_extract')", name="jobs_type_check"),
+        CheckConstraint("type IN ('map','agent_extract','search_scrape')", name="jobs_type_check"),
         CheckConstraint(
             "status IN ('queued','running','completed','failed','cancelled')",
             name="jobs_status_check",

@@ -3,6 +3,7 @@ import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 from fastapi import HTTPException
 from app.config import settings
+from app.middleware.logging import get_request_id
 
 @dataclass
 class SearchResult:
@@ -24,9 +25,13 @@ async def search(query: str, num_results: int) -> list[SearchResult]:
         raise HTTPException(
             status_code=500,
             detail={
-                "code": "SEARCH_NOT_CONFIGURED",
-                "message": "No search provider API key found. Set SERPER_API_KEY or SERPAPI_API_KEY in your .env file."
-            }
+                "error": {
+                    "code": "SEARCH_NOT_CONFIGURED",
+                    "message": "No search provider API key found. Set SERPER_API_KEY or SERPAPI_API_KEY in your .env file.",
+                    "request_id": get_request_id(),
+                    "details": {},
+                }
+            },
         )
 
 @retry(

@@ -3,7 +3,7 @@ import re
 import uuid
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -142,6 +142,7 @@ async def _background_scrape_search(job_id: uuid.UUID, search_results: list[Sear
 @router.post("/search", response_model=SearchResponse)
 async def search_endpoint(
     body: SearchRequest,
+    response: Response,
     api_key: ApiKey = Depends(require_scope("scrape")),
     session: AsyncSession = Depends(get_session),
 ) -> SearchResponse:
@@ -155,7 +156,14 @@ async def search_endpoint(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail={"code": "SEARCH_ERROR", "message": f"Search failed: {str(e)}", "request_id": request_id}
+            detail={
+                "error": {
+                    "code": "SEARCH_ERROR",
+                    "message": f"Search failed: {str(e)}",
+                    "request_id": request_id,
+                    "details": {},
+                }
+            },
         )
 
     out_results = [
@@ -169,12 +177,13 @@ async def search_endpoint(
 
     if body.scrape_top_n > 0:
         # Async background scrape
-        params = body.model_dump()
+        params = body.model_dump(exclude_none=True)
         idem = compute_idempotency_key(api_key.id, "search_scrape", params)
         
         # Check for existing job
         existing = await get_existing_job_by_idempotency(session, idem)
         if existing:
+            response.headers["X-Idempotency-Hit"] = "true"
             return SearchResponse(
                 query=body.query,
                 results=out_results,
@@ -211,7 +220,7 @@ async def search_endpoint(
 
 
 @router.get("/search/results/{task_id}", response_model=SearchTaskResultResponse)
-async def get_search_results(
+async def get_search_task_results(
     task_id: str,
     api_key: ApiKey = Depends(require_scope("scrape")),
     session: AsyncSession = Depends(get_session),
@@ -220,13 +229,33 @@ async def get_search_results(
     try:
         jid = uuid.UUID(task_id)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid task_id")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "code": "INVALID_TASK_ID",
+                    "message": "Invalid task_id format",
+                    "request_id": request_id,
+                    "details": {},
+                }
+            },
+        )
 
     res = await session.execute(select(Job).where(Job.id == jid))
     job = res.scalar_one_or_none()
-    
+
     if not job or job.api_key_id != api_key.id or job.type != "search_scrape":
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": "TASK_NOT_FOUND",
+                    "message": "Task not found",
+                    "request_id": request_id,
+                    "details": {},
+                }
+            },
+        )
 
     response_data = {
         "task_id": str(jid),

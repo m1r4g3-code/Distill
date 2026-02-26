@@ -1,8 +1,9 @@
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from app.db.models import ApiKey, Job, Extraction, Page
 from app.db.session import AsyncSessionLocal, get_session
@@ -33,6 +34,16 @@ class AgentExtractRequest(BaseModel):
     respect_robots: bool = False
     force: bool = False
 
+    @field_validator("url")
+    @classmethod
+    def validate_url_format(cls, v):
+        parsed = urlparse(v)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("URL must start with http:// or https://")
+        if not parsed.hostname:
+            raise ValueError("URL must contain a valid hostname")
+        return v
+
 class AgentExtractResponse(BaseModel):
     job_id: str
     status: str
@@ -47,12 +58,22 @@ async def agent_extract(
 ) -> AgentExtractResponse:
     request_id = get_request_id()
 
+    # Pre-validate URL for SSRF
     try:
-        validate_ssrf(body.url)
+        await validate_ssrf(body.url)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "INVALID_URL", "message": str(e), "request_id": request_id}}
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": {
+                    "code": "SSRF_BLOCKED",
+                    "message": str(e),
+                    "request_id": request_id,
+                    "details": {"url": body.url},
+                }
+            },
         )
 
     params = body.model_dump(exclude={"force"})
@@ -62,6 +83,7 @@ async def agent_extract(
         existing = await get_existing_job_by_idempotency(session, idem)
         if existing:
             response.status_code = 200
+            response.headers["X-Idempotency-Hit"] = "true"
             return AgentExtractResponse(job_id=str(existing.id), status=existing.status, request_id=request_id)
 
     job = await create_job(

@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import ipaddress
 import socket
@@ -28,37 +29,89 @@ def sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def validate_ssrf(url: str) -> None:
+async def validate_ssrf(url: str) -> None:
     parsed = urlparse(url)
-    if parsed.scheme in BLOCKED_SCHEMES:
-        raise SSRFBlockedError(f"Scheme '{parsed.scheme}' is not allowed")
-    if parsed.scheme not in {"http", "https"}:
-        raise SSRFBlockedError("Only http and https are allowed")
-    if not parsed.hostname:
-        raise SSRFBlockedError("URL must include a hostname")
 
+    if parsed.scheme not in {"http", "https"}:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": {
+                    "code": "SSRF_BLOCKED",
+                    "message": "Only http and https are allowed",
+                }
+            },
+        )
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "code": "INVALID_URL",
+                    "message": "Could not parse hostname from URL",
+                }
+            },
+        )
+
+    # Block raw IPs that are in private ranges without DNS lookup
     try:
-        resolved = socket.getaddrinfo(parsed.hostname, None)
+        ip_obj = ipaddress.ip_address(hostname)
+        for blocked in BLOCKED_RANGES:
+            if ip_obj in blocked:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": {
+                            "code": "SSRF_BLOCKED",
+                            "message": "URL resolves to a blocked IP range",
+                        }
+                    },
+                )
+        return  # It's a valid public IP, allow it
+    except ValueError:
+        pass  # Not a raw IP — it's a hostname, continue to DNS check
+
+    # DNS resolution for hostnames
+    try:
+        loop = asyncio.get_event_loop()
+        resolved = await loop.run_in_executor(None, lambda: socket.getaddrinfo(hostname, None))
         for info in resolved:
             ip = ipaddress.ip_address(info[4][0])
             for blocked in BLOCKED_RANGES:
                 if ip in blocked:
                     raise HTTPException(
                         status_code=403,
-                        detail={"code": "SSRF_BLOCKED", "message": "URL resolves to a blocked IP range"},
+                        detail={
+                            "error": {
+                                "code": "SSRF_BLOCKED",
+                                "message": "URL resolves to a blocked IP range",
+                            }
+                        },
                     )
-    except socket.gaierror:
+    except HTTPException:
+        raise
+    except OSError:
         raise HTTPException(
             status_code=400,
             detail={
-                "code": "DNS_RESOLUTION_FAILED",
-                "message": "Could not resolve hostname. Check the URL and try again.",
+                "error": {
+                    "code": "DNS_RESOLUTION_FAILED",
+                    "message": "Could not resolve hostname. Check the URL and try again.",
+                }
             },
         )
-    except HTTPException:
-        raise
     except Exception as e:
-        raise SSRFBlockedError(f"Validation error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Validation error: {str(e)}",
+                }
+            },
+        )
 
 
 def normalize_url(url: str, base_url: str | None = None, strip_www: bool = True) -> str:

@@ -1,9 +1,10 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Response
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Response, HTTPException, status
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from urllib.parse import urlparse
 
 from app.config import settings
 from app.db.models import ApiKey
@@ -36,6 +37,16 @@ class MapRequest(BaseModel):
     concurrency: int = Field(default=5, ge=1, le=10)
     force: bool = False
 
+    @field_validator("url")
+    @classmethod
+    def validate_url_format(cls, v):
+        parsed = urlparse(v)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("URL must start with http:// or https://")
+        if not parsed.hostname:
+            raise ValueError("URL must contain a valid hostname")
+        return v
+
 
 class MapResponse(BaseModel):
     job_id: str
@@ -52,6 +63,24 @@ async def map_site(
 ) -> MapResponse:
     request_id = get_request_id()
 
+    # Pre-validate root URL for SSRF
+    try:
+        await validate_ssrf(body.url)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": {
+                    "code": "SSRF_BLOCKED",
+                    "message": str(e),
+                    "request_id": request_id,
+                    "details": {"url": body.url},
+                }
+            },
+        )
+
     params = body.model_dump(exclude={"force"})
     idem = compute_idempotency_key(api_key.id, "map", params)
 
@@ -60,6 +89,7 @@ async def map_site(
         if existing:
             # Spec: idempotent re-POST returns 200 with the existing job
             response.status_code = 200
+            response.headers["X-Idempotency-Hit"] = "true"
             return MapResponse(job_id=str(existing.id), status=existing.status, request_id=request_id)
 
     job = await create_job(
@@ -90,8 +120,50 @@ async def map_site(
                 await crawl_site(job_session, job_obj, config)
                 await complete_job(job_session, job_obj)
             except Exception as e:
-                await fail_job(job_session, job_obj, "INTERNAL_ERROR", str(e))
+                await fail_job(job_session, job_obj, "MAP_FAILED", str(e))
 
     run_in_background(job.id, _job_coro(job.id, cfg))
+
+    return MapResponse(job_id=str(job.id), status=job.status, request_id=request_id)
+
+
+@router.get("/map/{job_id}", response_model=MapResponse)
+async def get_map_status(
+    job_id: str,
+    api_key: ApiKey = Depends(require_scope("map")),
+    session: AsyncSession = Depends(get_session),
+) -> MapResponse:
+    request_id = get_request_id()
+
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "JOB_NOT_FOUND",
+                    "message": "No job with given ID",
+                    "request_id": request_id,
+                    "details": {"job_id": job_id},
+                }
+            },
+        )
+
+    res = await session.execute(select(Job).where(Job.id == job_uuid))
+    job = res.scalar_one_or_none()
+
+    if not job or job.api_key_id != api_key.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "JOB_NOT_FOUND",
+                    "message": "No job with given ID",
+                    "request_id": request_id,
+                    "details": {"job_id": str(job_uuid)},
+                }
+            },
+        )
 
     return MapResponse(job_id=str(job.id), status=job.status, request_id=request_id)

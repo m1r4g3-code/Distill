@@ -75,7 +75,7 @@ def _is_probably_spa_shell(html_text: str) -> bool:
 
 async def fetch_url(url: str, timeout_ms: int, use_playwright: str = "auto") -> FetchResult:
     # SSRF Protection: Validate URL before fetching
-    validate_ssrf(url)
+    await validate_ssrf(url)
 
     if use_playwright == "always":
         from app.services.playwright_fetcher import fetch_playwright

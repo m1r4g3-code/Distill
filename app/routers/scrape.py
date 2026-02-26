@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from urllib.parse import urlparse
 
 from app.config import settings
 from app.db.models import ApiKey, Page
@@ -36,6 +37,16 @@ class ScrapeRequest(BaseModel):
     include_raw_html: bool = False
     timeout_ms: int = Field(default=20000, ge=1000, le=60000)
     cache_ttl_seconds: int | None = Field(default=None, ge=0, le=86400)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url_format(cls, v):
+        parsed = urlparse(v)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("URL must start with http:// or https://")
+        if not parsed.hostname:
+            raise ValueError("URL must contain a valid hostname")
+        return v
 
 
 class LinksModel(BaseModel):
@@ -104,8 +115,10 @@ async def scrape(
     request_id = get_request_id()
 
     try:
-        validate_ssrf(body.url)
-    except SSRFBlockedError as e:
+        await validate_ssrf(body.url)
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
@@ -131,7 +144,7 @@ async def scrape(
                         "code": "ROBOTS_BLOCKED",
                         "message": "robots.txt disallows this URL",
                         "request_id": request_id,
-                        "details": {},
+                        "details": {"url": normalized_url},
                     }
                 },
             )
@@ -146,6 +159,19 @@ async def scrape(
         fetched_at = _as_utc(cached_page.fetched_at)
         now = datetime.now(timezone.utc)
         if (now - fetched_at).total_seconds() <= ttl_seconds:
+            # Check for error in cached page
+            if cached_page.error_code:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail={
+                        "error": {
+                            "code": cached_page.error_code,
+                            "message": cached_page.error_message or "Cached fetch error",
+                            "request_id": request_id,
+                            "details": {"cached": True},
+                        }
+                    },
+                )
             return ScrapeResponse(
                 url=cached_page.url,
                 canonical_url=cached_page.canonical_url or cached_page.url,
@@ -189,12 +215,14 @@ async def scrape(
             detail={
                 "error": {
                     "code": "FETCH_TIMEOUT",
-                    "message": "Target URL did not respond within timeout",
+                    "message": f"Target URL did not respond within {body.timeout_ms}ms",
                     "request_id": request_id,
-                    "details": {},
+                    "details": {"timeout_ms": body.timeout_ms},
                 }
             },
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -203,7 +231,7 @@ async def scrape(
                     "code": "FETCH_ERROR",
                     "message": str(e),
                     "request_id": request_id,
-                    "details": {},
+                    "details": {"exception_type": type(e).__name__},
                 }
             },
         )

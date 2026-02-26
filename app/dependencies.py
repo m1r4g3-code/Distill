@@ -44,7 +44,7 @@ async def require_api_key(
                     "code": "UNAUTHORIZED",
                     "message": "API key missing required scope",
                     "request_id": get_request_id(),
-                    "details": {"required_scope": required_scope},
+                    "details": {"required_scope": required_scope, "provided_scopes": api_key.scopes},
                 }
             },
         )

@@ -1,6 +1,7 @@
-from fastapi import FastAPI
-
-from app.middleware.logging import RequestLoggingMiddleware
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from app.middleware.logging import RequestLoggingMiddleware, get_request_id
 from app.routers.jobs import router as jobs_router
 from app.routers.map import router as map_router
 from app.routers.search import router as search_router
@@ -12,6 +13,20 @@ def create_app() -> FastAPI:
     app = FastAPI(title="WebExtract Engine", version="1.0.0")
 
     app.add_middleware(RequestLoggingMiddleware)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Invalid request parameters",
+                    "request_id": get_request_id(),
+                    "details": exc.errors(),
+                }
+            },
+        )
 
     app.include_router(scrape_router, prefix="/api/v1")
     app.include_router(map_router, prefix="/api/v1")

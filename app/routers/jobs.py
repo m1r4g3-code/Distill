@@ -54,7 +54,7 @@ async def get_job_status(
                     "code": "JOB_NOT_FOUND",
                     "message": "No job with given ID",
                     "request_id": request_id,
-                    "details": {},
+                    "details": {"job_id": job_id},
                 }
             },
         )
@@ -69,7 +69,7 @@ async def get_job_status(
                     "code": "JOB_NOT_FOUND",
                     "message": "No job with given ID",
                     "request_id": request_id,
-                    "details": {},
+                    "details": {"job_id": str(jid)},
                 }
             },
         )
@@ -82,7 +82,7 @@ async def get_job_status(
                     "code": "JOB_NOT_FOUND",
                     "message": "No job with given ID",
                     "request_id": request_id,
-                    "details": {},
+                    "details": {"job_id": str(jid)},
                 }
             },
         )
@@ -126,7 +126,14 @@ async def get_job_results(
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "JOB_NOT_FOUND", "message": "No job with given ID", "request_id": request_id}}
+            detail={
+                "error": {
+                    "code": "JOB_NOT_FOUND",
+                    "message": "No job with given ID",
+                    "request_id": request_id,
+                    "details": {"job_id": job_id},
+                }
+            },
         )
 
     res = await session.execute(select(Job).where(Job.id == jid))
@@ -134,13 +141,27 @@ async def get_job_results(
     if not job or job.api_key_id != api_key.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "JOB_NOT_FOUND", "message": "No job with given ID", "request_id": request_id}}
+            detail={
+                "error": {
+                    "code": "JOB_NOT_FOUND",
+                    "message": "No job with given ID",
+                    "request_id": request_id,
+                    "details": {"job_id": str(jid)},
+                }
+            },
         )
 
     if job.status != "completed":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "JOB_NOT_READY", "message": f"Job is in state '{job.status}'", "request_id": request_id}}
+            detail={
+                "error": {
+                    "code": "JOB_NOT_READY",
+                    "message": f"Job is in state '{job.status}'",
+                    "request_id": request_id,
+                    "details": {},
+                }
+            },
         )
 
     if job.type == "map":
@@ -157,22 +178,36 @@ async def get_job_results(
             "urls": urls,
             "total": len(urls)
         }
-    elif job.type == "agent_extract":
-        # Handle Agent Extraction Results
+    elif job.type in {"agent_extract", "search_scrape"}:
+        # Handle Extraction Results
         res = await session.execute(select(Extraction).where(Extraction.job_id == jid))
         extraction = res.scalar_one_or_none()
         if not extraction:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": {"code": "RESULTS_NOT_FOUND", "message": "No extraction results found", "request_id": request_id}}
+                detail={
+                    "error": {
+                        "code": "RESULTS_NOT_FOUND",
+                        "message": "No extraction results found",
+                        "request_id": request_id,
+                        "details": {},
+                    }
+                },
             )
         return {
             "job_id": str(jid),
-            "type": "agent_extract",
+            "type": job.type,
             "data": extraction.data
         }
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": {"code": "UNSUPPORTED_JOB_TYPE", "message": f"Results for job type '{job.type}' are not supported", "request_id": request_id}}
+            detail={
+                "error": {
+                    "code": "UNSUPPORTED_JOB_TYPE",
+                    "message": f"Results for job type '{job.type}' are not supported",
+                    "request_id": request_id,
+                    "details": {},
+                }
+            },
         )

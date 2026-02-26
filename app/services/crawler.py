@@ -78,7 +78,7 @@ async def crawl_site(session: AsyncSession, job: Job, cfg: MapConfig) -> None:
         if depth > cfg.max_depth:
             continue
 
-        validate_ssrf(current)
+        await validate_ssrf(current)
 
         if cfg.respect_robots:
             allowed = await is_allowed_by_robots_async(current)
