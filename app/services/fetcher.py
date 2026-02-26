@@ -7,6 +7,19 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from app.config import settings
 from app.services.url_utils import validate_ssrf
 
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+}
 
 @dataclass
 class FetchResult:
@@ -34,7 +47,7 @@ async def fetch_httpx(url: str, timeout_ms: int) -> FetchResult:
     )
 
     start = time.perf_counter()
-    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout, headers={"User-Agent": "WebExtractBot/1.0"}) as client:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout, headers=BROWSER_HEADERS) as client:
         resp = await client.get(url)
 
     duration_ms = int((time.perf_counter() - start) * 1000)

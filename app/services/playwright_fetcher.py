@@ -1,25 +1,30 @@
 import time
-
 from playwright.async_api import async_playwright
-
 from app.config import settings
 from app.services.fetcher import FetchResult
 
-
-DEFAULT_UA = (
+BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
+    "Chrome/124.0.0.0 Safari/537.36"
 )
-
 
 async def fetch_playwright(url: str, timeout_ms: int) -> FetchResult:
     start = time.perf_counter()
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent=DEFAULT_UA)
+        # Apply realistic User-Agent
+        context = await browser.new_context(user_agent=BROWSER_UA)
         page = await context.new_page()
+
+        # Add additional realistic headers
+        await page.set_extra_http_headers({
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "DNT": "1",
+            "Upgrade-Insecure-Requests": "1",
+        })
 
         async def _route(route):
             rtype = route.request.resource_type

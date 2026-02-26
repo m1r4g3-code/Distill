@@ -2,6 +2,7 @@ import hashlib
 import ipaddress
 import socket
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
+from fastapi import HTTPException
 
 
 class SSRFBlockedError(Exception):
@@ -36,12 +37,28 @@ def validate_ssrf(url: str) -> None:
     if not parsed.hostname:
         raise SSRFBlockedError("URL must include a hostname")
 
-    resolved = socket.getaddrinfo(parsed.hostname, None)
-    for info in resolved:
-        ip = ipaddress.ip_address(info[4][0])
-        for blocked in BLOCKED_RANGES:
-            if ip in blocked:
-                raise SSRFBlockedError("URL resolves to blocked IP range")
+    try:
+        resolved = socket.getaddrinfo(parsed.hostname, None)
+        for info in resolved:
+            ip = ipaddress.ip_address(info[4][0])
+            for blocked in BLOCKED_RANGES:
+                if ip in blocked:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"code": "SSRF_BLOCKED", "message": "URL resolves to a blocked IP range"},
+                    )
+    except socket.gaierror:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "DNS_RESOLUTION_FAILED",
+                "message": "Could not resolve hostname. Check the URL and try again.",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise SSRFBlockedError(f"Validation error: {str(e)}")
 
 
 def normalize_url(url: str, base_url: str | None = None, strip_www: bool = True) -> str:

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     domain_delay_ms: int = 500
 
     serper_api_key: str | None = None
+    serpapi_api_key: str | None = None
     gemini_api_key: str | None = None
     search_timeout: float = 10.0
 
