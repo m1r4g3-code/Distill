@@ -10,7 +10,7 @@ from app.routers.agent import router as agent_router
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="WebExtract Engine", version="1.0.0")
+    app = FastAPI(title="WebExtract Engine", version="1.1.3")
 
     app.add_middleware(RequestLoggingMiddleware)
 

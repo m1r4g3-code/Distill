@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     app_env: str = "development"
-    app_version: str = "1.0.0"
+    app_version: str = "1.1.3"
 
 
 settings = Settings()
