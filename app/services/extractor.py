@@ -99,8 +99,8 @@ def parse_language(html_text: str) -> str | None:
 
 def extract_title(html_text: str, og_data: dict) -> str | None:
     # 1. Try OG title first
-    if og_data.get("title"):
-        return og_data["title"]
+    if og_data.get("og_title"):
+        return og_data["og_title"]
     
     # 2. Try <title> tag using BeautifulSoup
     soup = BeautifulSoup(html_text, "lxml")
@@ -116,18 +116,20 @@ def extract_title(html_text: str, og_data: dict) -> str | None:
     return None
 
 
-def extract_tables_as_markdown(html_text: str) -> str:
+def extract_tables(html_text: str) -> str:
     soup = BeautifulSoup(html_text, "lxml")
-    # Look for wikitable class specifically for Wikipedia, but allow others too
-    tables = soup.find_all("table", class_=lambda c: c and ("wikitable" in c) or True)
-    table_md = []
-    for table in tables[:5]:  # max 5 tables
-        # Use markdownify to convert individual table
-        md_text = md(str(table), heading_style="ATX")
-        if "|" in md_text:  # Ensure it actually produced a table
-            table_md.append(md_text)
-    
-    return "\n\n".join(table_md)
+    tables = soup.find_all("table")
+    if not tables:
+        return ""
+    table_mds = []
+    for table in tables[:3]:  # limit to first 3 tables
+        try:
+            md_text = md(str(table), heading_style="ATX")
+            if "|" in md_text:
+                table_mds.append(md_text)
+        except Exception:
+            pass
+    return "\n\n".join(table_mds)
 
 
 def extract_metadata(html_text: str, url: str) -> dict:
@@ -165,7 +167,7 @@ def extract_metadata(html_text: str, url: str) -> dict:
 
     # Fix 1: Title fallback logic
     meta_dict = {
-        "title": og_title,
+        "og_title": og_title,
         "description": description,
         "og_image": image,
         "author": author,
@@ -176,7 +178,8 @@ def extract_metadata(html_text: str, url: str) -> dict:
         "favicon_url": favicon_url,
     }
     
-    meta_dict["title"] = extract_title(html_text, meta_dict)
+    title = extract_title(html_text, meta_dict)
+    meta_dict["title"] = title
     
     return meta_dict
 
@@ -206,13 +209,17 @@ class ContentResult:
 
 def extract_content(cleaned_html: str) -> ContentResult:
     # Fix 2: Extract tables separately before trafilatura
-    tables_md = extract_tables_as_markdown(cleaned_html)
+    tables_md = extract_tables(cleaned_html)
 
     extracted = trafilatura.extract(
         cleaned_html,
         include_comments=False,
         include_tables=True,
-        output_format="xml",
+        include_links=False,
+        include_images=False,
+        no_fallback=False,        # allow fallback to readability
+        favor_recall=True,        # extract more content even if less precise
+        output_format="html",      # get HTML output so markdownify preserves tables
     )
     
     if extracted and len(extracted) >= 100:

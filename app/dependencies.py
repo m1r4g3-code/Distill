@@ -38,10 +38,10 @@ async def require_api_key(
     api_key = await authenticate_api_key(x_api_key=x_api_key, session=session)
     if required_scope not in (api_key.scopes or []):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "error": {
-                    "code": "UNAUTHORIZED",
+                    "code": "FORBIDDEN",
                     "message": "API key missing required scope",
                     "request_id": get_request_id(),
                     "details": {"required_scope": required_scope, "provided_scopes": api_key.scopes},
@@ -132,10 +132,10 @@ def require_any_scope(required_scopes: list[str]):
         scopes = set(api_key.scopes or [])
         if not any(scope in scopes for scope in required_scopes):
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail={
                     "error": {
-                        "code": "UNAUTHORIZED",
+                        "code": "FORBIDDEN",
                         "message": "API key missing required scope",
                         "request_id": get_request_id(),
                         "details": {"required_scopes": required_scopes},

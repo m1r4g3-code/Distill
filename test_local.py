@@ -13,6 +13,8 @@ def log(test_name, success, message="", response=None):
 
 async def run_tests():
     print(f"🚀 Starting v1.1.2 Patch Local Tests...")
+    import time
+    fresh_url = f"https://httpbin.org/html?nocache={int(time.time())}"
     
     # Use a client that doesn't reuse connections across crashes if needed
     async with httpx.AsyncClient(timeout=90, http2=False) as client:
@@ -60,14 +62,27 @@ async def run_tests():
         # Test 5: Real Scrape - httpbin.org (Fix 1: Title)
         try:
             r = await client.post(f"{BASE_URL}/scrape", headers=HEADERS,
-                                  json={"url": "https://httpbin.org/html"})
+                                  json={"url": fresh_url})
             if r.status_code == 200:
                 data = r.json()
                 log("httpbin.org title", data.get("title") is not None, f"title={data.get('title')}")
+                log("httpbin.org cached=False", data.get("cached") == False)
             else:
                 log("httpbin.org scrape", False, f"status={r.status_code}", r)
         except Exception as e:
             log("httpbin.org scrape", False, f"Test crashed: {e}")
+
+        # Test 5b: Cache Check (Fix 2)
+        try:
+            r = await client.post(f"{BASE_URL}/scrape", headers=HEADERS,
+                                  json={"url": fresh_url})
+            if r.status_code == 200:
+                data = r.json()
+                log("httpbin.org cached=True", data.get("cached") == True)
+            else:
+                log("httpbin.org cache scrape", False, f"status={r.status_code}", r)
+        except Exception as e:
+            log("httpbin.org cache scrape", False, f"Test crashed: {e}")
 
         # Test 6: Real Scrape - Wikipedia (Fix 2: Tables)
         try:

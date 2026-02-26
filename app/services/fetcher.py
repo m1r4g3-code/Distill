@@ -62,16 +62,28 @@ async def fetch_httpx(url: str, timeout_ms: int) -> FetchResult:
     )
 
 
-def should_use_playwright(html_text: str) -> bool:
-    # 1. Check word count (lower threshold to 50 words)
+ALWAYS_PLAYWRIGHT_DOMAINS = {
+    "react.dev", "nextjs.org", "vercel.com",
+    "github.com", "gitlab.com"
+}
+
+def should_fallback_to_playwright(url: str, html_text: str) -> bool:
+    # 1. Check for specific domains
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname or ""
+    host = host.replace("www.", "")
+    if host in ALWAYS_PLAYWRIGHT_DOMAINS:
+        return True
+
+    # 2. Check word count (lower threshold to 150 words)
     # Strip HTML tags for a rough word count
     text_content = re.sub(r"<[^>]+>", " ", html_text)
     word_count = len(text_content.split())
     
-    if word_count < 50:
+    if word_count < 150:
         return True
         
-    # 2. Check for SPA shell markers
+    # 3. Check for SPA shell markers
     lowered = html_text.lower()
     spa_markers = [
         'id="root"',
@@ -105,7 +117,7 @@ async def fetch_url(url: str, timeout_ms: int, use_playwright: str = "auto") -> 
     if "text/html" not in content_type:
         return fetched
 
-    if should_use_playwright(fetched.text):
+    if should_fallback_to_playwright(url, fetched.text):
         from app.services.playwright_fetcher import fetch_playwright
 
         return await fetch_playwright(url, timeout_ms=timeout_ms)

@@ -21,9 +21,24 @@ def create_app() -> FastAPI:
             content={
                 "error": {
                     "code": "VALIDATION_ERROR",
-                    "message": str(exc.errors()[0]["msg"]) if exc.errors() else "Invalid request",
+                    "message": exc.errors()[0]["msg"] if exc.errors() else "Invalid request body",
                     "request_id": get_request_id(),
                     "details": exc.errors(),
+                }
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request: Request, exc: Exception):
+        import traceback
+        traceback.print_exc()  # still log it server-side
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "An unexpected error occurred",
+                    "request_id": get_request_id(),
                 }
             },
         )
