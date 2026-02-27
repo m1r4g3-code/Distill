@@ -1,5 +1,6 @@
 import json
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from typing import Any, Dict, Optional
 from app.config import settings
 
@@ -17,11 +18,8 @@ async def extract_structured_data(
     if not settings.gemini_api_key:
         raise LLMExtractionError("GEMINI_API_KEY is not configured.")
 
-    genai.configure(api_key=settings.gemini_api_key)
+    client = genai.Client(api_key=settings.gemini_api_key)
     
-    # Use model from settings
-    model = genai.GenerativeModel(settings.gemini_model)
-
     system_prompt = (
         "You are an expert data extractor. You will be provided with webpage content in Markdown format. "
         "Your goal is to extract specific information as requested by the user and return it in valid JSON format. "
@@ -34,11 +32,12 @@ async def extract_structured_data(
     user_input = f"User Request: {prompt}\n\nWebpage Content:\n{content}"
 
     try:
-        # Use generate_content for extraction
-        # Note: In a more advanced version, we could use Gemini's structured output features (response_mime_type: application/json)
-        response = model.generate_content(
-            f"{system_prompt}\n\n{user_input}",
-            generation_config=genai.GenerationConfig(
+        # Use generate_content with the new SDK patterns
+        response = client.models.generate_content(
+            model=settings.gemini_model,
+            contents=user_input,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
                 response_mime_type="application/json"
             )
         )

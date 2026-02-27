@@ -37,6 +37,19 @@ async def create_job(
     input_params: dict,
     idempotency_key: str | None,
 ) -> Job:
+    if idempotency_key:
+        # Check if idempotency key already exists
+        existing = await session.execute(
+            select(Job).where(Job.idempotency_key == idempotency_key)
+        )
+        existing_job = existing.scalar_one_or_none()
+
+        if existing_job:
+            if existing_job.status == "failed":
+                pass  # allow re-run, fall through to create new job
+            else:
+                return existing_job  # return existing job immediately
+
     job = Job(
         api_key_id=api_key_id,
         type=job_type,

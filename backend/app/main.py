@@ -14,7 +14,7 @@ from app.routers.agent import router as agent_router
 from app.routers.metrics import router as metrics_router
 from app.routers.admin import router as admin_router
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 tags_metadata = [
     {
@@ -57,36 +57,56 @@ def create_app() -> FastAPI:
         sentry_sdk.init(dsn=settings.sentry_dsn)
         
     if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        try:
+            from asyncio import WindowsProactorEventLoopPolicy
+            if not isinstance(asyncio.get_event_loop_policy(), WindowsProactorEventLoopPolicy):
+                asyncio.set_event_loop_policy(WindowsProactorEventLoopPolicy())
+        except Exception:
+            pass
+
+        # Defensive stdout/stderr redirection for Windows console encoding
+        import io
+        if hasattr(sys.stdout, 'buffer') and sys.stdout.buffer:
+            try:
+                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+            except Exception:
+                pass
+        if hasattr(sys.stderr, 'buffer') and sys.stderr.buffer:
+            try:
+                sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
+            except Exception:
+                pass
+
     app = FastAPI(
         title="Distill - Scalable Web Extraction & Intelligence Engine",
         description="A powerful API for high-scale web scraping, website mapping, and AI-driven data extraction.",
         version=APP_VERSION,
         openapi_tags=tags_metadata,
         lifespan=lifespan,
-        contact={
-            "name": "Distill Support",
-            "url": "https://github.com/vibe-coder/distill",
-        },
-        license_info={
-            "name": "MIT",
-        },
     )
 
     app.add_middleware(RequestLoggingMiddleware)
 
+    def _make_json_safe(content):
+        import json
+        return json.loads(json.dumps(content, default=str))
+
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        from fastapi.encoders import jsonable_encoder
+        print(f"DEBUG: validation_exception_handler hit for {get_request_id()}")
+        errors = exc.errors()
+        content = {
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": errors[0]["msg"] if errors else "Invalid request body",
+                "request_id": get_request_id(),
+                "details": errors,
+            }
+        }
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": exc.errors()[0]["msg"] if exc.errors() else "Invalid request body",
-                    "request_id": get_request_id(),
-                    "details": [{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in exc.errors()],
-                }
-            },
+            content=_make_json_safe(content),
         )
 
     @app.exception_handler(Exception)

@@ -25,17 +25,22 @@ async def check_rate_limit(key_hash: str, limit: int, redis: Redis) -> bool:
     window_start = now - 60
     key = f"rate_limit:{key_hash}"
     
-    async with redis.pipeline() as pipe:
-        pipe.zremrangebyscore(key, 0, window_start)
-        pipe.zcard(key)
-        pipe.zadd(key, {str(now): now})
-        pipe.expire(key, 60)
-        results = await pipe.execute()
-        
-    current_count = results[1]
-    if current_count >= limit:
-        return False
-    return True
+    try:
+        async with redis.pipeline() as pipe:
+            pipe.zremrangebyscore(key, 0, window_start)
+            pipe.zcard(key)
+            pipe.zadd(key, {str(now): now})
+            pipe.expire(key, 60)
+            results = await pipe.execute()
+            
+        current_count = results[1]
+        if current_count >= limit:
+            return False
+        return True
+    except Exception as e:
+        import structlog
+        structlog.get_logger("app").warning("rate_limit.redis_error", error=str(e))
+        return True  # Fail-safe: allow request if Redis is down
 
 
 async def require_api_key(

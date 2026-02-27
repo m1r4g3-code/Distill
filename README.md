@@ -36,11 +36,12 @@ A high-performance, production-ready web extraction API designed for LLMs and AI
 
 2. **Install dependencies**:
    ```bash
+   cd backend
    pip install -r requirements.txt
    ```
 
 3. **Configure Environment**:
-   Create a `.env` file in the root directory:
+   Create a `.env` file in the `backend/` directory:
    ```env
    DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/webextract
    GEMINI_API_KEY=your_gemini_key
@@ -57,7 +58,7 @@ A high-performance, production-ready web extraction API designed for LLMs and AI
 
 Start the development server:
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8000
 ```
 
 ### API Endpoints

@@ -44,7 +44,7 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     app_env: str = "development"
-    app_version: str = "1.3.0"
+    app_version: str = "1.3.1"
     sentry_dsn: str | None = None
 
 
