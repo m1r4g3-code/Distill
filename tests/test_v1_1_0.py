@@ -21,7 +21,7 @@ def mock_fetch_url():
             status_code=200,
             headers={"content-type": "text/html"},
             text="""
-            <html>
+            <html lang="en">
             <head>
                 <title>Test Page</title>
                 <meta property="og:title" content="OG Title">
@@ -33,7 +33,7 @@ def mock_fetch_url():
                 <link rel="canonical" href="https://example.com/canonical">
                 <link rel="icon" href="/favicon.ico">
             </head>
-            <body lang="en">
+            <body>
                 <h1>Hello World</h1>
                 <p>This is a test.</p>
                 <p>We use cookies on this site.</p>
@@ -42,6 +42,7 @@ def mock_fetch_url():
                     <tr><th>Header 1</th><th>Header 2</th></tr>
                     <tr><td>Data 1</td><td>Data 2</td></tr>
                 </table>
+            </body>
             </body>
             </html>
             """,
@@ -58,6 +59,8 @@ async def test_scrape_v1_1_0_features(mock_fetch_url):
     
     # Setup Mock Database Session
     mock_session = AsyncMock()
+    mock_session.add = MagicMock()
+    mock_session.commit = AsyncMock()
     
     # Mock the result of the API key lookup
     mock_key_result = MagicMock()

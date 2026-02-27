@@ -37,7 +37,7 @@ class ScrapeRequest(BaseModel):
     include_raw_html: bool = False
     timeout_ms: int = Field(default=20000, ge=1000, le=60000)
     cache_ttl_seconds: int | None = Field(default=None, ge=0, le=86400)
-    cache_bypass: bool = False
+    force_refresh: bool = False
 
     @field_validator("url")
     @classmethod
@@ -138,6 +138,8 @@ async def scrape(
     if body.respect_robots:
         allowed = await is_allowed_by_robots_async(normalized_url)
         if not allowed:
+            from app.routers.metrics import increment_counter
+            await increment_counter("crawlclean_robots_blocked_total")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
@@ -154,13 +156,15 @@ async def scrape(
 
     ttl_seconds = settings.cache_ttl_seconds if body.cache_ttl_seconds is None else body.cache_ttl_seconds
 
-    if not body.cache_bypass:
+    if not body.force_refresh:
         existing = await session.execute(select(Page).where(Page.url_hash == url_hash))
         cached_page = existing.scalar_one_or_none()
         if cached_page and cached_page.markdown and ttl_seconds > 0:
             fetched_at = _as_utc(cached_page.fetched_at)
             now = datetime.now(timezone.utc)
             if (now - fetched_at).total_seconds() <= ttl_seconds:
+                from app.routers.metrics import increment_counter
+                await increment_counter("crawlclean_cache_hits_total")
                 # Check for error in cached page
                 if cached_page.error_code:
                     raise HTTPException(
@@ -205,7 +209,7 @@ async def scrape(
                     request_id=request_id,
                 )
     else:
-        # If cache_bypass is True, we still need to check if the page exists in DB to update it later
+        # If force_refresh is True, we still need to check if the page exists in DB to update it later
         existing = await session.execute(select(Page).where(Page.url_hash == url_hash))
         cached_page = existing.scalar_one_or_none()
 
@@ -242,15 +246,38 @@ async def scrape(
             },
         )
 
-    raw_html = fetched.text
-    links = extract_links(raw_html, base_url=fetched.final_url or normalized_url) if body.include_links else None
+    content_type = (fetched.headers.get("content-type") or "").lower()
+    is_pdf = "application/pdf" in content_type or normalized_url.lower().split("?")[0].endswith(".pdf")
 
-    # Extract Metadata
-    metadata_dict = extract_metadata(raw_html, normalized_url)
+    if is_pdf and fetched.raw_bytes:
+        from app.services.extractor import extract_pdf
+        markdown, pdf_metadata = extract_pdf(fetched.raw_bytes)
+        
+        metadata_dict = {
+            "title": pdf_metadata.get("title"),
+            "description": pdf_metadata.get("description"),
+            "og_image": None,
+            "author": pdf_metadata.get("author"),
+            "published_at": pdf_metadata.get("published_at"),
+            "site_name": None,
+            "language": None,
+            "favicon_url": None,
+            "canonical_url": normalized_url,
+        }
+        links = None
+        raw_html = None
+        content_hash = hashlib.sha256(fetched.raw_bytes).hexdigest()
+    else:
+        raw_html = fetched.text
+        links = extract_links(raw_html, base_url=fetched.final_url or normalized_url) if body.include_links else None
 
-    cleaned = clean_html(raw_html)
-    content_result = extract_content(cleaned)
-    markdown = html_to_markdown(content_result)
+        # Extract Metadata
+        metadata_dict = extract_metadata(raw_html, normalized_url)
+
+        cleaned = clean_html(raw_html)
+        content_result = extract_content(cleaned)
+        markdown = html_to_markdown(content_result)
+        content_hash = _content_hash(raw_html)
 
     word_count = len(markdown.split())
     read_time_minutes = round(word_count / 200)
@@ -262,7 +289,7 @@ async def scrape(
 
     page.url = normalized_url
     page.canonical_url = metadata_dict["canonical_url"] or normalize_url(fetched.final_url) if fetched.final_url else normalized_url
-    page.content_hash = _content_hash(raw_html)
+    page.content_hash = content_hash
     page.status_code = fetched.status_code
     page.title = metadata_dict["title"]
     page.description = metadata_dict["description"]

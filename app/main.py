@@ -11,16 +11,23 @@ from app.routers.map import router as map_router
 from app.routers.search import router as search_router
 from app.routers.scrape import router as scrape_router
 from app.routers.agent import router as agent_router
+from app.routers.metrics import router as metrics_router
 
-APP_VERSION = "1.1.5"
+APP_VERSION = "1.2.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # startup logic (e.g., db pools, background tasks) goes here
+    from app.tasks.cleanup import run_cleanup_loop
+    task = asyncio.create_task(run_cleanup_loop())
     yield
-    # shutdown logic goes here
+    task.cancel()
 
 def create_app() -> FastAPI:
+    from app.config import settings
+    if settings.sentry_dsn:
+        import sentry_sdk
+        sentry_sdk.init(dsn=settings.sentry_dsn)
+        
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     app = FastAPI(title="WebExtract Engine", version=APP_VERSION, lifespan=lifespan)
@@ -36,14 +43,15 @@ def create_app() -> FastAPI:
                     "code": "VALIDATION_ERROR",
                     "message": exc.errors()[0]["msg"] if exc.errors() else "Invalid request body",
                     "request_id": get_request_id(),
-                    "details": exc.errors(),
+                    "details": [{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in exc.errors()],
                 }
             },
         )
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        traceback.print_exc()  # still log it server-side
+        import structlog
+        structlog.get_logger("app").exception("unhandled_error")
         return JSONResponse(
             status_code=500,
             content={
@@ -61,10 +69,50 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router, prefix="/api/v1")
     app.include_router(search_router, prefix="/api/v1")
     app.include_router(agent_router, prefix="/api/v1")
+    app.include_router(metrics_router)  # No prefix for spec compliance
 
     @app.get("/health")
     async def health_check():
-        return {"status": "ok", "version": APP_VERSION}
+        from datetime import datetime, timezone
+        from sqlalchemy import text
+        from app.db.session import AsyncSessionLocal
+        from playwright.async_api import async_playwright
+        
+        db_status = "ok"
+        pw_status = "ok"
+        overall_status = "ok"
+
+        # Check DB connection
+        try:
+            async with AsyncSessionLocal() as session:
+                await session.execute(text("SELECT 1"))
+        except Exception as e:
+            structlog.get_logger("app").error("health.db_engine_error", error=str(e))
+            db_status = "error"
+            overall_status = "degraded"
+
+        # Check Playwright / Chromium availability
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-gpu", "--single-process"]
+                )
+                await browser.close()
+        except Exception as e:
+            structlog.get_logger("app").error("health.playwright_error", error=str(e))
+            pw_status = "error"
+            overall_status = "degraded"
+
+        return {
+            "status": overall_status,
+            "version": APP_VERSION,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "dependencies": {
+                "database": db_status,
+                "playwright": pw_status
+            }
+        }
 
     return app
 

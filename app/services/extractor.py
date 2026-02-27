@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 from readability import Document
 import trafilatura
+import fitz  # PyMuPDF
 
 from app.services.url_utils import normalize_url
 
@@ -307,3 +308,28 @@ def html_to_markdown(extracted: ContentResult) -> str:
     markdown = re.sub(r"\n{3,}", "\n\n", markdown)
 
     return markdown
+
+
+def extract_pdf(raw_bytes: bytes) -> tuple[str, dict]:
+    doc = fitz.open(stream=raw_bytes, filetype="pdf")
+    text_pages = []
+    for page in doc:
+        text_pages.append(page.get_text())
+    
+    markdown = "\n\n".join(text_pages)
+    
+    # Exract basic metadata if possible
+    meta = doc.metadata or {}
+    
+    metadata_dict = {
+        "title": meta.get("title") or None,
+        "author": meta.get("author") or None,
+        "description": meta.get("subject") or None,
+        "published_at": None, # Complex to parse reliably without external lib, omitting for now
+        "canonical_url": None,
+        "og_image": None,
+        "site_name": None,
+        "language": None,
+        "favicon_url": None,
+    }
+    return markdown, metadata_dict

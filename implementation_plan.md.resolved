@@ -1,0 +1,52 @@
+# Distill v1.2.0 Implementation Plan
+
+We will proceed iteratively through the 5 phases defined in the Master Plan.
+
+## User Review Required
+Please review this high-level plan for Phase 1 before we begin execution. We will do this chunk by chunk to maintain stability. Once you approve this plan, I'll execute the pre-flight checks and begin Phase 1.
+
+## Proposed Changes - Phase 1 (Hardening)
+
+### Application Configuration
+#### [MODIFY] [app/config.py](file:///c:/Users/HomePC/Documents/Distill/CascadeProjects/windsurf-project/app/config.py)
+- Add `job_cleanup_interval_hours` setting.
+
+### Utilities and Middleware
+#### [NEW] [app/utils/logging.py](file:///c:/Users/HomePC/Documents/Distill/CascadeProjects/windsurf-project/app/utils/logging.py)
+- Setup `structlog` configuration (JSON vs Pretty based on environment).
+- Add helper to bind `request_id`.
+- Implement sanitization to strip huge strings/raw HTML.
+
+#### [MODIFY] [app/middleware/logging.py](file:///c:/Users/HomePC/Documents/Distill/CascadeProjects/windsurf-project/app/middleware/logging.py)
+- Refactor to use `structlog` to emit start/end request events with `duration_ms`, `http_status`, `endpoint`, and `method`.
+
+### Core Application
+#### [MODIFY] [app/main.py](file:///c:/Users/HomePC/Documents/Distill/CascadeProjects/windsurf-project/app/main.py)
+- Update global exception handler to use `structlog.exception()`.
+- Update `/health` endpoint to query Postgres (`SELECT 1`) and ping Playwright browser instances logic.
+- Register background cleanup task in the lifespan context manager.
+- Register new `metrics_router`.
+- Confirm `APP_VERSION = "1.2.0"`.
+
+### Tasks & Routing
+#### [NEW] [app/routers/metrics.py](file:///c:/Users/HomePC/Documents/Distill/CascadeProjects/windsurf-project/app/routers/metrics.py)
+- Create Prometheus `/metrics` plaintext response endpoint.
+- Implement strictly in-memory module-level locking counters/metrics.
+
+#### [NEW] [app/tasks/cleanup.py](file:///c:/Users/HomePC/Documents/Distill/CascadeProjects/windsurf-project/app/tasks/cleanup.py)
+- Implement `purge_expired_jobs()` background loop against the `Job` SQLAlchemy model.
+
+#### [MODIFY] [app/routers/scrape.py](file:///c:/Users/HomePC/Documents/Distill/CascadeProjects/windsurf-project/app/routers/scrape.py)
+- Add `force_refresh: bool` to Pydantic schema.
+- Implement cache bypassing and UPSERT logic if `force_refresh` is true.
+
+- Note: We will replace all `print()` throughout `app/routers/*` and `app/services/*` with structlog calls as we touch files. We will also audit all error responses across all routers to match the v1.2.0 spec exactly.
+
+## Verification Plan
+
+### Automated Tests
+Phase 4 of the master plan involves building a robust `pytest` suite simulating these scenarios in memory using `respx` and `httpx.AsyncClient`. We will run these tests locally once built.
+
+### Manual Verification
+1. We will manually test the API via `curl` after every sub-task (e.g. hitting `/health` after upgrading it, hitting `/metrics` to test prometheus layout).
+2. We will check the `uvicorn` console logs for the new `structlog` JSON formatting.

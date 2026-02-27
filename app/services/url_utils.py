@@ -60,6 +60,8 @@ async def validate_ssrf(url: str) -> None:
         ip_obj = ipaddress.ip_address(hostname)
         for blocked in BLOCKED_RANGES:
             if ip_obj in blocked:
+                from app.routers.metrics import increment_counter
+                await increment_counter("crawlclean_ssrf_blocked_total")
                 raise HTTPException(
                     status_code=403,
                     detail={
@@ -81,6 +83,8 @@ async def validate_ssrf(url: str) -> None:
             ip = ipaddress.ip_address(info[4][0])
             for blocked in BLOCKED_RANGES:
                 if ip in blocked:
+                    from app.routers.metrics import increment_counter
+                    await increment_counter("crawlclean_ssrf_blocked_total")
                     raise HTTPException(
                         status_code=403,
                         detail={

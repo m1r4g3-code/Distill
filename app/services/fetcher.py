@@ -7,6 +7,10 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from app.config import settings
 from app.services.url_utils import validate_ssrf
+from app.routers.metrics import increment_counter, record_fetch_duration
+import structlog
+
+log = structlog.get_logger("fetcher")
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -31,6 +35,7 @@ class FetchResult:
     duration_ms: int
     final_url: str | None = None
     renderer: str = "httpx"
+    raw_bytes: bytes | None = None
 
 
 @retry(
@@ -47,11 +52,28 @@ async def fetch_httpx(url: str, timeout_ms: int) -> FetchResult:
         pool=10.0,
     )
 
+    proxies = None
+    if settings.proxy_enabled and settings.proxy_url:
+        proxies = {
+            "http://": settings.proxy_url,
+            "https://": settings.proxy_url,
+        }
+        log.info("fetch.proxy_used", url=url, renderer="httpx")
+
     start = time.perf_counter()
-    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout, headers=BROWSER_HEADERS) as client:
+    async with httpx.AsyncClient(
+        follow_redirects=True, 
+        timeout=timeout, 
+        headers=BROWSER_HEADERS,
+        proxies=proxies
+    ) as client:
         resp = await client.get(url)
 
     duration_ms = int((time.perf_counter() - start) * 1000)
+    
+    await increment_counter("crawlclean_fetch_total", {"renderer": "httpx", "status_code": str(resp.status_code)})
+    record_fetch_duration(duration_ms)
+
     return FetchResult(
         url=url,
         status_code=resp.status_code,
@@ -60,6 +82,7 @@ async def fetch_httpx(url: str, timeout_ms: int) -> FetchResult:
         duration_ms=duration_ms,
         final_url=str(resp.url) if resp.url else None,
         renderer="httpx",
+        raw_bytes=resp.content,
     )
 
 
@@ -118,6 +141,7 @@ async def fetch_url(url: str, timeout_ms: int, use_playwright: str = "auto") -> 
         return fetched
 
     if should_fallback_to_playwright(url, fetched.text):
+        await increment_counter("crawlclean_playwright_fallback_total")
         from app.services.playwright_fetcher import fetch_playwright
 
         return await fetch_playwright(url, timeout_ms=timeout_ms)

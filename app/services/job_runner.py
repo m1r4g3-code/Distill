@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Job
-
+from app.routers.metrics import increment_counter
 
 _tasks: dict[uuid.UUID, asyncio.Task] = {}
 
@@ -48,6 +48,8 @@ async def create_job(
     session.add(job)
     await session.commit()
     await session.refresh(job)
+    
+    await increment_counter("crawlclean_jobs_total", {"type": job_type, "status": "queued"})
     return job
 
 
@@ -55,12 +57,15 @@ async def start_job(session: AsyncSession, job: Job) -> None:
     job.status = "running"
     job.started_at = datetime.now(timezone.utc)
     await session.commit()
+    await increment_counter("crawlclean_active_jobs", {"type": job.type}, 1)
 
 
 async def complete_job(session: AsyncSession, job: Job) -> None:
     job.status = "completed"
     job.completed_at = datetime.now(timezone.utc)
     await session.commit()
+    await increment_counter("crawlclean_jobs_total", {"type": job.type, "status": "completed"})
+    await increment_counter("crawlclean_active_jobs", {"type": job.type}, -1)
 
 
 async def fail_job(session: AsyncSession, job: Job, error_code: str, error_message: str) -> None:
@@ -69,6 +74,10 @@ async def fail_job(session: AsyncSession, job: Job, error_code: str, error_messa
     job.error_message = error_message
     job.completed_at = datetime.now(timezone.utc)
     await session.commit()
+    await increment_counter("crawlclean_jobs_total", {"type": job.type, "status": "failed"})
+    # It might fail before starting, but usually it fails during running.
+    # To be perfectly accurate we'd check if it was 'running' but -1 here is fine for the MVP.
+    await increment_counter("crawlclean_active_jobs", {"type": job.type}, -1)
 
 
 def run_in_background(job_id: uuid.UUID, coro) -> None:

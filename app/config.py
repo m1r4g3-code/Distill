@@ -17,9 +17,14 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-32-chars-minimum"
 
     cache_ttl_seconds: int = 3600
+    job_cleanup_interval_hours: int = 1
 
     fetch_connect_timeout: float = 5.0
     fetch_read_timeout: float = 20.0
+
+    proxy_enabled: bool = False
+    proxy_url: str | None = None
+    proxy_rotate: bool = False
 
     playwright_timeout: float = 30.0
 
@@ -35,7 +40,8 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     app_env: str = "development"
-    app_version: str = "1.1.5"
+    app_version: str = "1.2.0"
+    sentry_dsn: str | None = None
 
 
 settings = Settings()
