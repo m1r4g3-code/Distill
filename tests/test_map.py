@@ -1,6 +1,7 @@
 import pytest
 import httpx
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
+from app.services.url_utils import validate_ssrf
 
 @pytest.mark.asyncio
 async def test_map_requires_auth(client: httpx.AsyncClient):
@@ -23,10 +24,10 @@ async def test_map_invalid_url(client: httpx.AsyncClient, valid_api_key: str):
 
 
 @pytest.mark.asyncio
-@patch("app.routers.map.crawl_site")
-async def test_map_success_queued(mock_crawl, client: httpx.AsyncClient, valid_api_key: str):
-    # Setup mock to just return immediately (background task)
-    mock_crawl.return_value = None
+@patch("app.routers.map.create_pool")
+async def test_map_success_queued(mock_create_pool, client: httpx.AsyncClient, valid_api_key: str):
+    mock_redis = AsyncMock()
+    mock_create_pool.return_value = mock_redis
 
     response = await client.post(
         "/api/v1/map",
@@ -37,6 +38,7 @@ async def test_map_success_queued(mock_crawl, client: httpx.AsyncClient, valid_a
     data = response.json()
     assert data["status"] == "queued"
     assert "job_id" in data
+    assert mock_redis.enqueue_job.called
 
 
 @pytest.mark.asyncio
@@ -77,7 +79,11 @@ async def test_map_ssrf_blocked(mock_validate, client: httpx.AsyncClient, valid_
 
 
 @pytest.mark.asyncio
-async def test_map_idempotency(client: httpx.AsyncClient, valid_api_key: str):
+@patch("app.routers.map.create_pool")
+async def test_map_idempotency(mock_create_pool, client: httpx.AsyncClient, valid_api_key: str):
+    mock_redis = AsyncMock()
+    mock_create_pool.return_value = mock_redis
+    
     # First request
     response1 = await client.post(
         "/api/v1/map",

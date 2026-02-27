@@ -18,24 +18,27 @@ from app.services.job_runner import (
     complete_job,
     compute_idempotency_key,
     create_job,
-    fail_job,
     get_existing_job_by_idempotency,
-    run_in_background,
     start_job,
 )
+from arq import create_pool
+from arq.connections import RedisSettings
 
 
 router = APIRouter(tags=["map"])
 
 
 class MapRequest(BaseModel):
-    url: str
-    max_depth: int = Field(default=2, ge=1, le=5)
-    max_pages: int = Field(default=100, ge=1, le=1000)
-    respect_robots: bool = True
-    include_patterns: list[str] = Field(default_factory=list)
-    exclude_patterns: list[str] = Field(default_factory=list)
-    concurrency: int = Field(default=5, ge=1, le=10)
+    url: str = Field(..., description="The seed URL to begin mapping from.", examples=["https://example.com/blog"])
+    max_depth: int = Field(default=2, ge=0, le=5, description="Maximum link-hop depth to crawl.")
+    max_pages: int = Field(default=100, ge=1, le=1000, description="Maximum number of pages to index in this job.")
+    include_raw_html: bool = Field(default=False, description="Whether to save the raw HTML in the database for mapped pages.")
+    respect_robots: bool = Field(default=True, description="Strictly adhere to the domain's robots.txt rules.")
+    use_playwright: str = Field(default="auto", pattern="^(auto|always|never)$", description="Whether to render pages dynamically.")
+    timeout_ms: int = Field(default=20000, ge=1000, le=60000, description="Network timeout per page fetch in milliseconds.")
+    include_patterns: list[str] = Field(default_factory=list, description="List of URL regex patterns to exclusively include.")
+    exclude_patterns: list[str] = Field(default_factory=list, description="List of URL regex patterns to exclude from mapping.")
+    concurrency: int = Field(default=5, ge=1, le=10, description="Maximum concurrent connections to the domain.")
     force: bool = False
 
     @field_validator("url")
@@ -55,8 +58,17 @@ class MapResponse(BaseModel):
     request_id: str
 
 
-@router.post("/map", status_code=202, response_model=MapResponse)
-async def map_site(
+@router.post(
+    "/map",
+    response_model=MapResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Map Website Architecture",
+    description=(
+        "Enqueue an asynchronous job to crawl a website starting from the seed URL. "
+        "Respects robots.txt and discovers internal links up to max_depth."
+    )
+)
+async def map_website(
     body: MapRequest,
     response: Response,
     api_key: ApiKey = Depends(require_scope("map")),
@@ -112,18 +124,8 @@ async def map_site(
         respect_robots=body.respect_robots,
     )
 
-    async def _job_coro(job_id: uuid.UUID, config: MapConfig):
-        async with AsyncSessionLocal() as job_session:
-            res = await job_session.execute(select(Job).where(Job.id == job_id))
-            job_obj = res.scalar_one()
-            try:
-                await start_job(job_session, job_obj)
-                await crawl_site(job_session, job_obj, config)
-                await complete_job(job_session, job_obj)
-            except Exception as e:
-                await fail_job(job_session, job_obj, "MAP_FAILED", str(e))
-
-    run_in_background(job.id, _job_coro(job.id, cfg))
+    redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    await redis.enqueue_job("run_map_job", job.id)
 
     return MapResponse(job_id=str(job.id), status=job.status, request_id=request_id)
 

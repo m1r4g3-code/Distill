@@ -12,8 +12,36 @@ from app.routers.search import router as search_router
 from app.routers.scrape import router as scrape_router
 from app.routers.agent import router as agent_router
 from app.routers.metrics import router as metrics_router
+from app.routers.admin import router as admin_router
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
+
+tags_metadata = [
+    {
+        "name": "scrape",
+        "description": "High-speed URL content extraction with automatic JS rendering detection.",
+    },
+    {
+        "name": "map",
+        "description": "Website architecture discovery and sitemap generation.",
+    },
+    {
+        "name": "agent",
+        "description": "Intelligent multi-modal agents for structured data extraction using natural language prompts.",
+    },
+    {
+        "name": "search",
+        "description": "Global web search integration across multiple providers.",
+    },
+    {
+        "name": "jobs",
+        "description": "Status tracking and result retrieval for background asynchronous tasks.",
+    },
+    {
+        "name": "admin",
+        "description": "Administrative endpoints for API key lifecycle management.",
+    },
+]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -30,7 +58,20 @@ def create_app() -> FastAPI:
         
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    app = FastAPI(title="WebExtract Engine", version=APP_VERSION, lifespan=lifespan)
+    app = FastAPI(
+        title="Distill - Scalable Web Extraction & Intelligence Engine",
+        description="A powerful API for high-scale web scraping, website mapping, and AI-driven data extraction.",
+        version=APP_VERSION,
+        openapi_tags=tags_metadata,
+        lifespan=lifespan,
+        contact={
+            "name": "Distill Support",
+            "url": "https://github.com/vibe-coder/distill",
+        },
+        license_info={
+            "name": "MIT",
+        },
+    )
 
     app.add_middleware(RequestLoggingMiddleware)
 
@@ -69,6 +110,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router, prefix="/api/v1")
     app.include_router(search_router, prefix="/api/v1")
     app.include_router(agent_router, prefix="/api/v1")
+    app.include_router(admin_router, prefix="/api/v1/admin")
     app.include_router(metrics_router)  # No prefix for spec compliance
 
     @app.get("/health")

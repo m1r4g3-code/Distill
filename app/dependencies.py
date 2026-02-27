@@ -33,7 +33,7 @@ async def check_rate_limit(key_hash: str, limit: int, redis: Redis) -> bool:
         results = await pipe.execute()
         
     current_count = results[1]
-    if current_count > limit:
+    if current_count >= limit:
         return False
     return True
 

@@ -36,7 +36,11 @@ async def test_health_check(monkeypatch):
     import structlog
     monkeypatch.setattr(structlog, "get_logger", MagicMock())
     
-    with patch("playwright.async_api.async_playwright") as mock_pw_context:
+    with patch("playwright.async_api.async_playwright") as mock_pw_context, \
+         patch("app.db_redis.ping_redis") as mock_redis_ping:
+        # Mock Redis
+        mock_redis_ping.return_value = True
+        
         # Mock the context manager returned by async_playwright()
         mock_pw = AsyncMock()
         mock_pw_context.return_value.__aenter__.return_value = mock_pw

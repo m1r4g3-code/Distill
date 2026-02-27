@@ -14,6 +14,7 @@ from app.db.models import Job, JobPage, Page
 from app.services.extractor import extract_links
 from app.services.fetcher import fetch_url
 from app.services.robots import is_allowed_by_robots_async
+from sqlalchemy.orm.attributes import flag_modified
 from app.services.url_utils import compute_url_hash, normalize_url, validate_ssrf
 
 
@@ -55,7 +56,7 @@ async def _polite_wait(host: str, delay_ms: int) -> None:
         await asyncio.sleep(remaining / 1000.0)
 
 
-async def crawl_site(session: AsyncSession, job: Job, cfg: MapConfig) -> None:
+async def crawl_site(session: AsyncSession, job: Job, cfg: MapConfig, pw_pool=None) -> None:
     root = normalize_url(cfg.root_url)
     root_host = urlparse(root).hostname
     if not root_host:
@@ -91,7 +92,7 @@ async def crawl_site(session: AsyncSession, job: Job, cfg: MapConfig) -> None:
         async with sem:
             await _polite_wait(host, cfg.domain_delay_ms)
             _domain_last_request[host] = time.time()
-            fetched = await fetch_url(current, timeout_ms=20000, use_playwright="never")
+            fetched = await fetch_url(current, timeout_ms=20000, use_playwright="never", pw_pool=pw_pool)
 
         raw_html = fetched.text
         links = extract_links(raw_html, base_url=fetched.final_url or current)
@@ -121,6 +122,8 @@ async def crawl_site(session: AsyncSession, job: Job, cfg: MapConfig) -> None:
 
         seen.add(current)
         job.pages_discovered = len(seen)
+        job.progress = {"pages_crawled": len(seen), "pages_total": cfg.max_pages}
+        flag_modified(job, "progress")
         await session.commit()
 
         for nxt in links.internal:

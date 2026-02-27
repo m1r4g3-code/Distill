@@ -11,7 +11,7 @@ from app.db.models import ApiKey
 
 async def generate_api_key(name: str, scopes: list[str], rate_limit: int = 60):
     # Generate a secure random key
-    raw_key = f"de_{secrets.token_urlsafe(32)}"
+    raw_key = f"sk_{secrets.token_urlsafe(32)}"
     key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
     engine = create_async_engine(settings.database_url)

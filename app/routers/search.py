@@ -32,9 +32,10 @@ router = APIRouter(tags=["search"])
 
 
 class SearchRequest(BaseModel):
-    query: str
-    num_results: int = Field(default=10, ge=1, le=20)
+    query: str = Field(..., description="The search query to search the internet for.", examples=["Latest advancements in AI"])
+    num_results: int = Field(default=5, ge=1, le=20, description="The number of search results to return.")
     scrape_top_n: int = Field(default=0, ge=0, le=10)
+    search_type: str = Field(default="search", pattern="^(search|news)$", description="The type of search to execute: 'search' or 'news'.")
     search_provider: str = Field(default="auto")
     respect_robots: bool = False
 
@@ -139,7 +140,15 @@ async def _background_scrape_search(job_id: uuid.UUID, search_results: list[Sear
             await fail_job(session, job, "SEARCH_SCRAPE_FAILED", str(e))
 
 
-@router.post("/search", response_model=SearchResponse)
+@router.post(
+    "/search",
+    response_model=SearchResponse,
+    summary="Perform Web Search",
+    description=(
+        "Executes a web search utilizing configured upstream providers (Serper/SerpAPI) "
+        "and returns normalized search results."
+    )
+)
 async def search_endpoint(
     body: SearchRequest,
     response: Response,

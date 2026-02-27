@@ -1,8 +1,9 @@
 import pytest
 import httpx
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 from app.db.models import ApiKey
 from app.dependencies import sha256_hex
+from app.services.robots import is_allowed_by_robots_async
 
 # We will need some fixtures to insert a valid API key into the test database
 # and potentially mock the fetcher to avoid real network requests.
@@ -167,17 +168,23 @@ async def test_scrape_robots_txt_blocked(mock_robots, client: httpx.AsyncClient,
 
 
 @pytest.mark.asyncio
+@patch("app.routers.scrape.create_pool")
 @patch("app.routers.scrape.fetch_url")
-async def test_scrape_timeout(mock_fetch_url, client: httpx.AsyncClient, valid_api_key: str):
+async def test_scrape_timeout(mock_fetch_url, mock_create_pool, client: httpx.AsyncClient, valid_api_key: str):
     mock_fetch_url.side_effect = httpx.TimeoutException("Timeout")
+    mock_redis = AsyncMock()
+    mock_create_pool.return_value = mock_redis
     
     response = await client.post(
         "/api/v1/scrape",
         headers={"X-API-Key": valid_api_key},
         json={"url": "https://example.com/timeout"}
     )
-    assert response.status_code == 504
-    assert response.json()["detail"]["error"]["code"] == "FETCH_TIMEOUT"
+    assert response.status_code == 202
+    data = response.json()
+    assert data["status"] == "queued"
+    assert "job_id" in data
+    assert mock_redis.enqueue_job.called
 
 
 @pytest.mark.asyncio

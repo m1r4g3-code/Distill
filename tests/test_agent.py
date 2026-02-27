@@ -26,8 +26,10 @@ async def test_agent_extract_ssrf_blocked(mock_validate, client: httpx.AsyncClie
 
 
 @pytest.mark.asyncio
-@patch("app.routers.agent.run_in_background")
-async def test_agent_extract_success_queued(mock_run_bg, client: httpx.AsyncClient, valid_api_key: str):
+@patch("app.routers.agent.create_pool")
+async def test_agent_extract_success_queued(mock_create_pool, client: httpx.AsyncClient, valid_api_key: str):
+    mock_redis = AsyncMock()
+    mock_create_pool.return_value = mock_redis
     # Success returns 202 Accepted
     response = await client.post(
         "/api/v1/agent/extract",
@@ -42,12 +44,14 @@ async def test_agent_extract_success_queued(mock_run_bg, client: httpx.AsyncClie
     data = response.json()
     assert data["status"] == "queued"
     assert "job_id" in data
-    assert mock_run_bg.called
+    assert mock_redis.enqueue_job.called
 
 
 @pytest.mark.asyncio
-@patch("app.routers.agent.run_in_background")
-async def test_agent_extract_idempotency(mock_run_bg, client: httpx.AsyncClient, valid_api_key: str):
+@patch("app.routers.agent.create_pool")
+async def test_agent_extract_idempotency(mock_create_pool, client: httpx.AsyncClient, valid_api_key: str):
+    mock_redis = AsyncMock()
+    mock_create_pool.return_value = mock_redis
     payload = {
         "url": "https://example.com/idem",
         "prompt": "Get price and title.",

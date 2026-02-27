@@ -20,18 +20,20 @@ from app.services.job_runner import (
     fail_job,
     compute_idempotency_key,
     get_existing_job_by_idempotency,
-    run_in_background,
 )
 from app.services.url_utils import validate_ssrf, normalize_url
+from app.config import settings
+from arq import create_pool
+from arq.connections import RedisSettings
 
 router = APIRouter(tags=["agent"])
 
 class AgentExtractRequest(BaseModel):
-    url: str
-    prompt: str
-    schema_: Optional[Dict[str, Any]] = Field(None, alias="schema")
-    use_playwright: str = Field(default="auto", pattern="^(auto|always|never)$")
-    respect_robots: bool = False
+    url: str = Field(..., description="The highly qualified URL for the agent to fetch and extract data from.", examples=["https://en.wikipedia.org/wiki/Web_scraping"])
+    prompt: str = Field(..., description="The instruction provided to the multi-modal agent.", examples=["Extract the main definition of the topic in two sentences."])
+    schema_definition: dict | None = Field(default=None, description="An optional JSON Schema dictionary used to forcefully structure the LLM output.")
+    use_playwright: str = Field(default="auto", pattern="^(auto|always|never)$", description="Whether to employ Playwright for dynamically rendering JS applications.")
+    timeout_ms: int = Field(default=30000, ge=1000, le=60000, description="Network timeout threshold in milliseconds.")
     force: bool = False
 
     @field_validator("url")
@@ -49,7 +51,15 @@ class AgentExtractResponse(BaseModel):
     status: str
     request_id: str
 
-@router.post("/agent/extract", status_code=202, response_model=AgentExtractResponse)
+@router.post(
+    "/agent/extract",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Agent Data Extraction",
+    description=(
+        "Dispatch a serverless multi-modal agent to perform intelligent entity/data extraction "
+        "on the target URL using the provided natural language prompt."
+    )
+)
 async def agent_extract(
     body: AgentExtractRequest,
     response: Response,
@@ -94,48 +104,7 @@ async def agent_extract(
         idempotency_key=idem,
     )
 
-    async def _job_coro(job_id: uuid.UUID, url: str, prompt: str, schema: Optional[Dict[str, Any]], use_playwright: str, respect_robots: bool):
-        async with AsyncSessionLocal() as job_session:
-            # Re-fetch job object in this session
-            from sqlalchemy import select
-            res = await job_session.execute(select(Job).where(Job.id == job_id))
-            job_obj = res.scalar_one()
-            
-            try:
-                await start_job(job_session, job_obj)
-                
-                # 1. Fetch
-                normalized = normalize_url(url)
-
-                if respect_robots:
-                    allowed = await is_allowed_by_robots_async(normalized)
-                    if not allowed:
-                        await fail_job(job_session, job_obj, "ROBOTS_BLOCKED", "robots.txt disallows this URL")
-                        return
-
-                fetched = await fetch_url(normalized, timeout_ms=30000, use_playwright=use_playwright)
-                
-                # 2. Extract Markdown
-                cleaned = clean_html(fetched.text)
-                content_result = extract_content(cleaned)
-                markdown = html_to_markdown(content_result)
-                
-                # 3. LLM Extraction
-                structured_data = await extract_structured_data(markdown, prompt, schema)
-                
-                # 4. Save result in extractions table
-                # We can also save the page if it doesn't exist, but for MVP let's just save extraction
-                extraction = Extraction(
-                    job_id=job_id,
-                    data=structured_data,
-                    prompt=prompt
-                )
-                job_session.add(extraction)
-                
-                await complete_job(job_session, job_obj)
-            except Exception as e:
-                await fail_job(job_session, job_obj, "EXTRACTION_FAILED", str(e))
-
-    run_in_background(job.id, _job_coro(job.id, body.url, body.prompt, body.schema_, body.use_playwright, body.respect_robots))
-
+    redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    await redis.enqueue_job("run_agent_job", job.id)
+    
     return AgentExtractResponse(job_id=str(job.id), status=job.status, request_id=request_id)

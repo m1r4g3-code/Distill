@@ -8,7 +8,9 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from app.config import settings
 from app.services.url_utils import validate_ssrf
 from app.routers.metrics import increment_counter, record_fetch_duration
+from app.db_redis import get_redis
 import structlog
+import asyncio
 
 log = structlog.get_logger("fetcher")
 
@@ -123,27 +125,57 @@ def should_fallback_to_playwright(url: str, html_text: str) -> bool:
     return False
 
 
-async def fetch_url(url: str, timeout_ms: int, use_playwright: str = "auto") -> FetchResult:
+async def acquire_domain_slot(domain: str) -> None:
+    try:
+        redis = await anext(get_redis())
+    except Exception:
+        return
+    key = f"domain_concurrency:{domain}"
+    while True:
+        count = await redis.incr(key)
+        if count <= settings.max_domain_concurrency:
+            await redis.expire(key, 60)
+            return
+        await redis.decr(key)
+        await asyncio.sleep(0.5)
+
+async def release_domain_slot(domain: str) -> None:
+    try:
+        redis = await anext(get_redis())
+    except Exception:
+        return
+    key = f"domain_concurrency:{domain}"
+    await redis.decr(key)
+
+
+async def fetch_url(url: str, timeout_ms: int, use_playwright: str = "auto", pw_pool=None) -> FetchResult:
     # SSRF Protection: Validate URL before fetching
     await validate_ssrf(url)
 
-    if use_playwright == "always":
-        from app.services.playwright_fetcher import fetch_playwright
-
-        return await fetch_playwright(url, timeout_ms=timeout_ms)
-
-    fetched = await fetch_httpx(url, timeout_ms=timeout_ms)
-    if use_playwright == "never":
+    from urllib.parse import urlparse
+    domain = urlparse(url).hostname or "unknown"
+    
+    await acquire_domain_slot(domain)
+    try:
+        if use_playwright == "always":
+            from app.services.playwright_fetcher import fetch_playwright
+    
+            return await fetch_playwright(url, timeout_ms=timeout_ms, pw_pool=pw_pool)
+    
+        fetched = await fetch_httpx(url, timeout_ms=timeout_ms)
+        if use_playwright == "never":
+            return fetched
+    
+        content_type = (fetched.headers.get("content-type") or "").lower()
+        if "text/html" not in content_type:
+            return fetched
+    
+        if should_fallback_to_playwright(url, fetched.text):
+            await increment_counter("crawlclean_playwright_fallback_total")
+            from app.services.playwright_fetcher import fetch_playwright
+    
+            return await fetch_playwright(url, timeout_ms=timeout_ms, pw_pool=pw_pool)
+    
         return fetched
-
-    content_type = (fetched.headers.get("content-type") or "").lower()
-    if "text/html" not in content_type:
-        return fetched
-
-    if should_fallback_to_playwright(url, fetched.text):
-        await increment_counter("crawlclean_playwright_fallback_total")
-        from app.services.playwright_fetcher import fetch_playwright
-
-        return await fetch_playwright(url, timeout_ms=timeout_ms)
-
-    return fetched
+    finally:
+        await release_domain_slot(domain)

@@ -24,20 +24,28 @@ from app.services.extractor import (
 from app.services.fetcher import fetch_url
 from app.services.robots import is_allowed_by_robots_async
 from app.services.url_utils import SSRFBlockedError, compute_url_hash, normalize_url, validate_ssrf
+from app.services.job_runner import create_job, compute_idempotency_key
+from arq import create_pool
+from arq.connections import RedisSettings
+from fastapi.responses import JSONResponse
+from redis.asyncio import Redis
+from app.db_redis import get_redis
+import json
+from app.routers.metrics import increment_counter
 
 
 router = APIRouter(tags=["scrape"])
 
 
 class ScrapeRequest(BaseModel):
-    url: str
-    respect_robots: bool = False
-    use_playwright: str = Field(default="auto", pattern="^(auto|always|never)$")
-    include_links: bool = True
-    include_raw_html: bool = False
-    timeout_ms: int = Field(default=20000, ge=1000, le=60000)
-    cache_ttl_seconds: int | None = Field(default=None, ge=0, le=86400)
-    force_refresh: bool = False
+    url: str = Field(..., description="The highly qualified URL to scrape.", examples=["https://example.com/article"])
+    respect_robots: bool = Field(default=False, description="Check robots.txt before scraping.")
+    use_playwright: str = Field(default="auto", pattern="^(auto|always|never)$", description="Whether to use playwright for dynamic content.")
+    include_links: bool = Field(default=True, description="Whether to extract internal and external links from the page.")
+    include_raw_html: bool = Field(default=False, description="Whether to include the raw HTML block in the response.")
+    timeout_ms: int = Field(default=20000, ge=1000, le=60000, description="Page load timeout in milliseconds.")
+    cache_ttl_seconds: int | None = Field(default=None, ge=0, le=86400, description="Override the default cache TTL setting.")
+    force_refresh: bool = Field(default=False, description="Bypass the cache entirely and force a fresh scrape.")
 
     @field_validator("url")
     @classmethod
@@ -78,6 +86,7 @@ class ScrapeResponse(BaseModel):
     metadata: MetadataModel
     links: LinksModel | None
     cached: bool
+    cache_layer: str | None = None
     request_id: str
 
 
@@ -107,11 +116,20 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-@router.post("/scrape", response_model=ScrapeResponse)
+@router.post(
+    "/scrape",
+    response_model=ScrapeResponse,
+    summary="Scrape URL Content",
+    description=(
+        "Synchronously scrape textual content and metadata from a given URL. "
+        "Will auto-detect JavaScript rendering requirements."
+    )
+)
 async def scrape(
     body: ScrapeRequest,
     api_key: ApiKey = Depends(require_scope("scrape")),
     session: AsyncSession = Depends(get_session),
+    redis: Redis = Depends(get_redis),
 ) -> ScrapeResponse:
     request_id = get_request_id()
 
@@ -138,7 +156,6 @@ async def scrape(
     if body.respect_robots:
         allowed = await is_allowed_by_robots_async(normalized_url)
         if not allowed:
-            from app.routers.metrics import increment_counter
             await increment_counter("crawlclean_robots_blocked_total")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -156,14 +173,27 @@ async def scrape(
 
     ttl_seconds = settings.cache_ttl_seconds if body.cache_ttl_seconds is None else body.cache_ttl_seconds
 
-    if not body.force_refresh:
+    redis_cache_key = f"page_cache:{url_hash}"
+    if not body.force_refresh and ttl_seconds > 0:
+        # Check Redis Cache First
+        cached_str = await redis.get(redis_cache_key)
+        if cached_str:
+            await increment_counter("crawlclean_cache_hits_total")
+            try:
+                data = json.loads(cached_str)
+                data["cache_layer"] = "redis"
+                data["cached"] = True
+                data["request_id"] = request_id
+                return ScrapeResponse(**data)
+            except Exception:
+                pass  # Fall back to DB if parsing fails
+                
         existing = await session.execute(select(Page).where(Page.url_hash == url_hash))
         cached_page = existing.scalar_one_or_none()
-        if cached_page and cached_page.markdown and ttl_seconds > 0:
+        if cached_page and cached_page.markdown:
             fetched_at = _as_utc(cached_page.fetched_at)
             now = datetime.now(timezone.utc)
             if (now - fetched_at).total_seconds() <= ttl_seconds:
-                from app.routers.metrics import increment_counter
                 await increment_counter("crawlclean_cache_hits_total")
                 # Check for error in cached page
                 if cached_page.error_code:
@@ -178,7 +208,7 @@ async def scrape(
                             }
                         },
                     )
-                return ScrapeResponse(
+                resp = ScrapeResponse(
                     url=cached_page.url,
                     canonical_url=cached_page.canonical_url or cached_page.url,
                     status_code=cached_page.status_code or 200,
@@ -196,7 +226,7 @@ async def scrape(
                         description=cached_page.description,
                         og_image=getattr(cached_page, "og_image", None),
                         author=cached_page.author if hasattr(cached_page, "author") else None,
-                        published_at=None,  # We'll fix this in a bit or just use existing
+                        published_at=None,
                         site_name=getattr(cached_page, "site_name", None),
                         language=getattr(cached_page, "language", None),
                         favicon_url=getattr(cached_page, "favicon_url", None),
@@ -206,8 +236,13 @@ async def scrape(
                         renderer=cached_page.renderer or "httpx",
                     ),
                     cached=True,
+                    cache_layer="db",
                     request_id=request_id,
                 )
+                
+                # Backfill Redis
+                await redis.setex(redis_cache_key, 600, resp.model_dump_json())
+                return resp
     else:
         # If force_refresh is True, we still need to check if the page exists in DB to update it later
         existing = await session.execute(select(Page).where(Page.url_hash == url_hash))
@@ -220,17 +255,38 @@ async def scrape(
             use_playwright=body.use_playwright,
         )
     except httpx.TimeoutException:
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail={
-                "error": {
-                    "code": "FETCH_TIMEOUT",
-                    "message": f"Target URL did not respond within {body.timeout_ms}ms",
+        if body.timeout_ms >= 5000:
+            # Fallback to ARQ background job for long tasks
+            job = await create_job(
+                session,
+                api_key_id=api_key.id,
+                job_type="search_scrape",
+                input_params=body.model_dump(),
+                idempotency_key=compute_idempotency_key(api_key.id, "search_scrape", body.model_dump())
+            )
+            redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+            await redis.enqueue_job("run_scrape_job", job.id)
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={
+                    "job_id": str(job.id),
+                    "status": "queued",
                     "request_id": request_id,
-                    "details": {"timeout_ms": body.timeout_ms},
+                    "message": f"Scrape took longer than {body.timeout_ms}ms, falling back to background worker."
                 }
-            },
-        )
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail={
+                    "error": {
+                        "code": "FETCH_TIMEOUT",
+                        "message": f"Target URL did not respond within {body.timeout_ms}ms",
+                        "request_id": request_id,
+                        "details": {"timeout_ms": body.timeout_ms},
+                    }
+                },
+            )
     except HTTPException:
         raise
     except Exception as e:
@@ -267,20 +323,50 @@ async def scrape(
         links = None
         raw_html = None
         content_hash = hashlib.sha256(fetched.raw_bytes).hexdigest()
+        word_count = len(markdown.split())
+        read_time_minutes = round(word_count / 200)
     else:
         raw_html = fetched.text
-        links = extract_links(raw_html, base_url=fetched.final_url or normalized_url) if body.include_links else None
-
-        # Extract Metadata
-        metadata_dict = extract_metadata(raw_html, normalized_url)
-
-        cleaned = clean_html(raw_html)
-        content_result = extract_content(cleaned)
-        markdown = html_to_markdown(content_result)
         content_hash = _content_hash(raw_html)
-
-    word_count = len(markdown.split())
-    read_time_minutes = round(word_count / 200)
+        
+        if cached_page and cached_page.content_hash == content_hash:
+            # Content matches existing hash; skip expensive DOM parsing
+            await increment_counter("crawlclean_hash_hits_total")
+            
+            markdown = cached_page.markdown or ""
+            metadata_dict = {
+                "title": cached_page.title,
+                "description": cached_page.description,
+                "og_image": getattr(cached_page, "og_image", None),
+                "author": cached_page.author if hasattr(cached_page, "author") else None,
+                "published_at": None,
+                "site_name": getattr(cached_page, "site_name", None),
+                "language": getattr(cached_page, "language", None),
+                "favicon_url": getattr(cached_page, "favicon_url", None),
+                "canonical_url": cached_page.canonical_url or normalized_url,
+            }
+            links = None
+            if body.include_links:
+                from collections import namedtuple
+                Links = namedtuple("Links", ["internal", "external"])
+                links = Links(
+                    internal=cached_page.links_internal or [],
+                    external=cached_page.links_external or []
+                )
+            word_count = cached_page.word_count or 0
+            read_time_minutes = cached_page.read_time_minutes or 0
+        else:
+            links = extract_links(raw_html, base_url=fetched.final_url or normalized_url) if body.include_links else None
+    
+            # Extract Metadata
+            metadata_dict = extract_metadata(raw_html, normalized_url)
+    
+            cleaned = clean_html(raw_html)
+            content_result = extract_content(cleaned)
+            markdown = html_to_markdown(content_result)
+    
+            word_count = len(markdown.split())
+            read_time_minutes = round(word_count / 200)
 
     page = cached_page
     if page is None:
@@ -309,7 +395,7 @@ async def scrape(
 
     await session.commit()
 
-    return ScrapeResponse(
+    final_resp = ScrapeResponse(
         url=page.url,
         canonical_url=page.canonical_url or page.url,
         status_code=page.status_code or 200,
@@ -330,5 +416,12 @@ async def scrape(
             renderer=page.renderer or "httpx",
         ),
         cached=False,
+        cache_layer="none",
         request_id=request_id,
     )
+    
+    # Store fetched entry in redis if acceptable
+    if ttl_seconds > 0:
+        await redis.setex(redis_cache_key, 600, final_resp.model_dump_json())
+
+    return final_resp

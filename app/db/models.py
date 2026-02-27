@@ -84,6 +84,7 @@ class Job(Base):
     status: Mapped[str] = mapped_column(String, nullable=False, default="queued")
     input_params: Mapped[dict] = mapped_column(JSONB, nullable=False)
     idempotency_key: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    progress: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     pages_discovered: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

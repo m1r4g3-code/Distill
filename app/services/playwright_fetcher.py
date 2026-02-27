@@ -16,7 +16,7 @@ BROWSER_UA = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 
-async def fetch_playwright(url: str, timeout_ms: int) -> FetchResult:
+async def fetch_playwright(url: str, timeout_ms: int, pw_pool=None) -> FetchResult:
     start = time.perf_counter()
     browser = None
     context = None
@@ -26,56 +26,86 @@ async def fetch_playwright(url: str, timeout_ms: int) -> FetchResult:
     raw_bytes = None
 
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--no-first-run",
-                    "--no-zygote",
-                    "--single-process",
-                ],
-            )
+        if pw_pool:
+            async with pw_pool.get_context() as ctx:
+                page = await ctx.new_page()
+                
+                # Apply evasions
+                await Stealth().apply_stealth_async(page)
+                log.info("fetch.stealth_applied", url=url)
 
-            proxy_settings = None
-            if settings.proxy_enabled and settings.proxy_url:
-                proxy_settings = {"server": settings.proxy_url}
-                log.info("fetch.proxy_used", url=url, renderer="playwright")
+                await page.set_extra_http_headers({
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5",
+                    "DNT": "1",
+                    "Upgrade-Insecure-Requests": "1",
+                })
 
-            context = await browser.new_context(
-                user_agent=BROWSER_UA,
-                proxy=proxy_settings,
-            )
-            page = await context.new_page()
-            
-            # Apply evasions
-            await Stealth().apply_stealth_async(page)
-            log.info("fetch.stealth_applied", url=url)
+                # Block heavy asset types by extension to speed up load
+                await page.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,css}", lambda route: asyncio.create_task(route.abort()))
 
-            await page.set_extra_http_headers({
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-                "DNT": "1",
-                "Upgrade-Insecure-Requests": "1",
-            })
+                response = await page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=min(int(settings.playwright_timeout * 1000), timeout_ms),
+                )
 
-            # Block heavy asset types by extension to speed up load
-            await page.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,css}", lambda route: asyncio.create_task(route.abort()))
+                # Allow some JS rendering time after DOM is ready
+                await asyncio.sleep(2)
+                content = await page.content()
+                if response:
+                    raw_bytes = await response.body()
+        else:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--no-first-run",
+                        "--no-zygote",
+                        "--single-process",
+                    ],
+                )
 
-            response = await page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=min(int(settings.playwright_timeout * 1000), timeout_ms),
-            )
+                proxy_settings = None
+                if settings.proxy_enabled and settings.proxy_url:
+                    proxy_settings = {"server": settings.proxy_url}
+                    log.info("fetch.proxy_used", url=url, renderer="playwright")
 
-            # Allow some JS rendering time after DOM is ready
-            await asyncio.sleep(2)
-            content = await page.content()
-            if response:
-                raw_bytes = await response.body()
+                context = await browser.new_context(
+                    user_agent=BROWSER_UA,
+                    proxy=proxy_settings,
+                )
+                page = await context.new_page()
+                
+                # Apply evasions
+                await Stealth().apply_stealth_async(page)
+                log.info("fetch.stealth_applied", url=url)
+
+                await page.set_extra_http_headers({
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5",
+                    "DNT": "1",
+                    "Upgrade-Insecure-Requests": "1",
+                })
+
+                # Block heavy asset types by extension to speed up load
+                await page.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,css}", lambda route: asyncio.create_task(route.abort()))
+
+                response = await page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=min(int(settings.playwright_timeout * 1000), timeout_ms),
+                )
+
+                # Allow some JS rendering time after DOM is ready
+                await asyncio.sleep(2)
+                content = await page.content()
+                if response:
+                    raw_bytes = await response.body()
     except Exception as e:
         raise Exception(f"Playwright failed: {str(e)}")
 

@@ -30,18 +30,21 @@ class Settings(BaseSettings):
     playwright_timeout: float = 30.0
 
     domain_delay_ms: int = 500
+    max_domain_concurrency: int = 2
 
     serper_api_key: str | None = None
     serpapi_api_key: str | None = None
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.0-flash"
     search_timeout: float = 10.0
+    
+    admin_key: str = "change-me-admin-key"
 
     default_rate_limit: int = 60
 
     log_level: str = "INFO"
     app_env: str = "development"
-    app_version: str = "1.2.0"
+    app_version: str = "1.3.0"
     sentry_dsn: str | None = None
 
 
