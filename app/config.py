@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://postgres:dev@localhost:5432/webextract"
     secret_key: str = "change-me-32-chars-minimum"
+    redis_url: str = "redis://localhost:6379/0"
 
     cache_ttl_seconds: int = 3600
     job_cleanup_interval_hours: int = 1

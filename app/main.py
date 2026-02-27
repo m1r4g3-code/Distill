@@ -73,13 +73,16 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health_check():
+        import structlog
         from datetime import datetime, timezone
         from sqlalchemy import text
         from app.db.session import AsyncSessionLocal
         from playwright.async_api import async_playwright
+        from app.db_redis import ping_redis
         
         db_status = "ok"
         pw_status = "ok"
+        redis_status = "ok"
         overall_status = "ok"
 
         # Check DB connection
@@ -104,12 +107,19 @@ def create_app() -> FastAPI:
             pw_status = "error"
             overall_status = "degraded"
 
+        # Check Redis connection
+        if not await ping_redis():
+            structlog.get_logger("app").error("health.redis_error")
+            redis_status = "error"
+            overall_status = "degraded"
+
         return {
             "status": overall_status,
             "version": APP_VERSION,
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "dependencies": {
                 "database": db_status,
+                "redis": redis_status,
                 "playwright": pw_status
             }
         }

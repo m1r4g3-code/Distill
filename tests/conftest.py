@@ -7,6 +7,8 @@ from app.main import app
 from app.db.session import engine, AsyncSessionLocal
 from app.db.models import Base, ApiKey
 from app.dependencies import sha256_hex
+from app.db_redis import get_redis
+import fakeredis.aioredis
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -24,6 +26,19 @@ async def setup_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def mock_redis():
+    """Provides a global FakeRedis instance and overrides the FastAPI dependency."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    
+    async def override_get_redis():
+        yield redis
+        
+    app.dependency_overrides[get_redis] = override_get_redis
+    yield redis
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
