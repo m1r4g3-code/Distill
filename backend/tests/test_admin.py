@@ -40,7 +40,23 @@ async def test_admin_create_and_list_keys(client: httpx.AsyncClient, db_session)
     assert len(list_data) >= 1
     assert any(k["id"] == key_id for k in list_data)
 
-    # 3. Revoke Key
+    # 3. Update Key (PATCH)
+    patch_resp = await client.patch(
+        f"/api/v1/admin/keys/{key_id}",
+        headers={"X-Admin-Key": settings.admin_key},
+        json={"name": "Updated Key", "rate_limit": 500}
+    )
+    assert patch_resp.status_code == 200
+    patch_data = patch_resp.json()
+    assert patch_data["name"] == "Updated Key"
+    assert patch_data["rate_limit"] == 500
+    
+    # Verify DB Update
+    await db_session.refresh(api_key)
+    assert api_key.name == "Updated Key"
+    assert api_key.rate_limit == 500
+
+    # 4. Revoke Key
     revoke_resp = await client.delete(
         f"/api/v1/admin/keys/{key_id}",
         headers={"X-Admin-Key": settings.admin_key}
