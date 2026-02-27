@@ -37,6 +37,7 @@ class ScrapeRequest(BaseModel):
     include_raw_html: bool = False
     timeout_ms: int = Field(default=20000, ge=1000, le=60000)
     cache_ttl_seconds: int | None = Field(default=None, ge=0, le=86400)
+    cache_bypass: bool = False
 
     @field_validator("url")
     @classmethod
@@ -153,55 +154,60 @@ async def scrape(
 
     ttl_seconds = settings.cache_ttl_seconds if body.cache_ttl_seconds is None else body.cache_ttl_seconds
 
-    existing = await session.execute(select(Page).where(Page.url_hash == url_hash))
-    cached_page = existing.scalar_one_or_none()
-    if cached_page and cached_page.markdown and ttl_seconds > 0:
-        fetched_at = _as_utc(cached_page.fetched_at)
-        now = datetime.now(timezone.utc)
-        if (now - fetched_at).total_seconds() <= ttl_seconds:
-            # Check for error in cached page
-            if cached_page.error_code:
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail={
-                        "error": {
-                            "code": cached_page.error_code,
-                            "message": cached_page.error_message or "Cached fetch error",
-                            "request_id": request_id,
-                            "details": {"cached": True},
-                        }
-                    },
-                )
-            return ScrapeResponse(
-                url=cached_page.url,
-                canonical_url=cached_page.canonical_url or cached_page.url,
-                status_code=cached_page.status_code or 200,
-                title=cached_page.title,
-                markdown=cached_page.markdown or "",
-                links=(
-                    LinksModel(
-                        internal=cached_page.links_internal or [],
-                        external=cached_page.links_external or [],
+    if not body.cache_bypass:
+        existing = await session.execute(select(Page).where(Page.url_hash == url_hash))
+        cached_page = existing.scalar_one_or_none()
+        if cached_page and cached_page.markdown and ttl_seconds > 0:
+            fetched_at = _as_utc(cached_page.fetched_at)
+            now = datetime.now(timezone.utc)
+            if (now - fetched_at).total_seconds() <= ttl_seconds:
+                # Check for error in cached page
+                if cached_page.error_code:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail={
+                            "error": {
+                                "code": cached_page.error_code,
+                                "message": cached_page.error_message or "Cached fetch error",
+                                "request_id": request_id,
+                                "details": {"cached": True},
+                            }
+                        },
                     )
-                    if body.include_links
-                    else None
-                ),
-                metadata=MetadataModel(
-                    description=cached_page.description,
-                    og_image=getattr(cached_page, "og_image", None),
-                    author=cached_page.author if hasattr(cached_page, "author") else None,
-                    published_at=None,  # We'll fix this in a bit or just use existing
-                    site_name=getattr(cached_page, "site_name", None),
-                    language=getattr(cached_page, "language", None),
-                    favicon_url=getattr(cached_page, "favicon_url", None),
-                    word_count=cached_page.word_count,
-                    read_time_minutes=getattr(cached_page, "read_time_minutes", None),
-                    fetch_duration_ms=cached_page.fetch_duration_ms or 0,
-                    renderer=cached_page.renderer or "httpx",
-                ),
-                cached=True,
-                request_id=request_id,
-            )
+                return ScrapeResponse(
+                    url=cached_page.url,
+                    canonical_url=cached_page.canonical_url or cached_page.url,
+                    status_code=cached_page.status_code or 200,
+                    title=cached_page.title,
+                    markdown=cached_page.markdown or "",
+                    links=(
+                        LinksModel(
+                            internal=cached_page.links_internal or [],
+                            external=cached_page.links_external or [],
+                        )
+                        if body.include_links
+                        else None
+                    ),
+                    metadata=MetadataModel(
+                        description=cached_page.description,
+                        og_image=getattr(cached_page, "og_image", None),
+                        author=cached_page.author if hasattr(cached_page, "author") else None,
+                        published_at=None,  # We'll fix this in a bit or just use existing
+                        site_name=getattr(cached_page, "site_name", None),
+                        language=getattr(cached_page, "language", None),
+                        favicon_url=getattr(cached_page, "favicon_url", None),
+                        word_count=cached_page.word_count,
+                        read_time_minutes=getattr(cached_page, "read_time_minutes", None),
+                        fetch_duration_ms=cached_page.fetch_duration_ms or 0,
+                        renderer=cached_page.renderer or "httpx",
+                    ),
+                    cached=True,
+                    request_id=request_id,
+                )
+    else:
+        # If cache_bypass is True, we still need to check if the page exists in DB to update it later
+        existing = await session.execute(select(Page).where(Page.url_hash == url_hash))
+        cached_page = existing.scalar_one_or_none()
 
     try:
         fetched = await fetch_url(

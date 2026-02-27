@@ -1,3 +1,4 @@
+import asyncio
 import time
 from playwright.async_api import async_playwright
 from app.config import settings
@@ -11,42 +12,72 @@ BROWSER_UA = (
 
 async def fetch_playwright(url: str, timeout_ms: int) -> FetchResult:
     start = time.perf_counter()
+    browser = None
+    context = None
+    page = None
+    response = None
+    content = ""
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        # Apply realistic User-Agent
-        context = await browser.new_context(user_agent=BROWSER_UA)
-        page = await context.new_page()
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--no-first-run",
+                    "--no-zygote",
+                    "--single-process",
+                ],
+            )
 
-        # Add additional realistic headers
-        await page.set_extra_http_headers({
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "DNT": "1",
-            "Upgrade-Insecure-Requests": "1",
-        })
+            context = await browser.new_context(user_agent=BROWSER_UA)
+            page = await context.new_page()
 
-        async def _route(route):
-            rtype = route.request.resource_type
-            if rtype in {"image", "font", "media"}:
-                await route.abort()
-                return
-            await route.continue_()
+            await page.set_extra_http_headers({
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "DNT": "1",
+                "Upgrade-Insecure-Requests": "1",
+            })
 
-        await page.route("**/*", _route)
+            # Block heavy asset types by extension to speed up load
+            await page.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,css}", lambda route: asyncio.create_task(route.abort()))
 
-        response = await page.goto(
-            url,
-            wait_until="networkidle",
-            timeout=min(settings.playwright_timeout * 1000, timeout_ms),
-        )
+            response = await page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=min(int(settings.playwright_timeout * 1000), timeout_ms),
+            )
 
-        content = await page.content()
-        await context.close()
-        await browser.close()
+            # Allow some JS rendering time after DOM is ready
+            await asyncio.sleep(2)
+            content = await page.content()
+    except Exception as e:
+        # Ensure proper cleanup before surfacing the error
+        try:
+            if context:
+                await context.close()
+        except Exception:
+            pass
+        try:
+            if browser:
+                await browser.close()
+        except Exception:
+            pass
+        raise Exception(f"Playwright failed: {str(e)}")
+    else:
+        # Normal cleanup on success
+        try:
+            if context:
+                await context.close()
+        finally:
+            if browser:
+                await browser.close()
 
     duration_ms = int((time.perf_counter() - start) * 1000)
-
     status_code = response.status if response else 200
     headers = response.headers if response else {}
     final_url = response.url if response else url

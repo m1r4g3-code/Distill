@@ -1,3 +1,5 @@
+import sys
+import asyncio
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -10,7 +12,9 @@ from app.routers.agent import router as agent_router
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="WebExtract Engine", version="1.1.3")
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    app = FastAPI(title="WebExtract Engine", version="1.1.5")
 
     app.add_middleware(RequestLoggingMiddleware)
 

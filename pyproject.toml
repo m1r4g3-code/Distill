@@ -1,6 +1,6 @@
 [project]
 name = "webextract"
-version = "1.0.0"
+version = "1.1.4"
 description = "WebExtract Engine backend MVP"
 requires-python = ">=3.11"
 dependencies = [

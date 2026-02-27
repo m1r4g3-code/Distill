@@ -208,13 +208,13 @@ class ContentResult:
 
 
 def extract_content(cleaned_html: str) -> ContentResult:
-    # Fix 2: Extract tables separately before trafilatura
+    # Fix 3: Extract tables separately before trafilatura
     tables_md = extract_tables(cleaned_html)
 
     extracted = trafilatura.extract(
         cleaned_html,
         include_comments=False,
-        include_tables=True,
+        include_tables=False,       # don't include tables as we extract them separately
         include_links=False,
         include_images=False,
         no_fallback=False,        # allow fallback to readability
@@ -298,7 +298,7 @@ def html_to_markdown(extracted: ContentResult) -> str:
     # Join and final cleanup
     markdown = "\n".join(processed_lines).strip()
     
-    # Fix 2: Append tables at the end
+    # Fix 3: Append tables at the end
     if extracted.tables_md:
         if markdown:
             markdown += "\n\n"

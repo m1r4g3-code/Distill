@@ -1,3 +1,4 @@
+import re
 import time
 from dataclasses import dataclass
 
@@ -93,9 +94,8 @@ def should_fallback_to_playwright(url: str, html_text: str) -> bool:
         "window.__nuxt__",
         "__remix_manifest",
     ]
-    for marker in spa_markers:
-        if marker in lowered:
-            return True
+    if any(m in lowered for m in spa_markers):
+        return True
             
     return False
 

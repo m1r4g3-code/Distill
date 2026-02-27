@@ -28,13 +28,14 @@ class Settings(BaseSettings):
     serper_api_key: str | None = None
     serpapi_api_key: str | None = None
     gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.0-flash"
     search_timeout: float = 10.0
 
     default_rate_limit: int = 60
 
     log_level: str = "INFO"
     app_env: str = "development"
-    app_version: str = "1.1.3"
+    app_version: str = "1.1.5"
 
 
 settings = Settings()

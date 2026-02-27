@@ -19,8 +19,8 @@ async def extract_structured_data(
 
     genai.configure(api_key=settings.gemini_api_key)
     
-    # We use gemini-1.5-flash for speed and cost-efficiency in MVP
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # Use model from settings
+    model = genai.GenerativeModel(settings.gemini_model)
 
     system_prompt = (
         "You are an expert data extractor. You will be provided with webpage content in Markdown format. "
