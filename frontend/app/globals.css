@@ -1,0 +1,222 @@
+@import "tailwindcss";
+
+/* ── Design System Tokens ── */
+:root {
+  --background: #FAFAFA;
+  --surface: #FFFFFF;
+  --surface-elevated: #F4F4F6;
+  --border: #E4E4E7;
+  --border-subtle: #ECECEF;
+  --text-primary: #0A0A0B;
+  --text-secondary: #52525B;
+  --text-muted: #A1A1AA;
+  --accent: #18181B;
+  --accent-subtle: #F0F0F5;
+  --dot-color: rgba(0, 0, 0, 0.06);
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --success: #22C55E;
+  --warning: #F59E0B;
+  --error: #EF4444;
+}
+
+.dark {
+  --background: #0A0A0B;
+  --surface: #111113;
+  --surface-elevated: #1A1A1D;
+  --border: #2A2A2E;
+  --border-subtle: #1E1E22;
+  --text-primary: #F8F8F8;
+  --text-secondary: #A0A0AB;
+  --text-muted: #6B6B76;
+  --accent: #E8E8F0;
+  --accent-subtle: #2A2A35;
+  --dot-color: rgba(255, 255, 255, 0.06);
+  --glass-bg: rgba(255, 255, 255, 0.03);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --success: #4ADE80;
+  --warning: #FBBF24;
+  --error: #F87171;
+}
+
+/* ── Tailwind v4 Theme ── */
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-glass-bg: var(--glass-bg);
+  --color-glass-border: var(--glass-border);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* ── Base Styles ── */
+body {
+  background: var(--background);
+  color: var(--text-primary);
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+}
+
+/* ── Dot Grid Background ── */
+.grid-background {
+  background-color: var(--background);
+  background-image: radial-gradient(circle,
+      var(--dot-color) 1px,
+      transparent 1px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse 80% 80% at 50% 50%,
+      black 40%,
+      transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 80% at 50% 50%,
+      black 40%,
+      transparent 100%);
+}
+
+/* ── Hero Dot Grid ── */
+.dot-grid-bg {
+  background-image: radial-gradient(circle,
+      rgba(0, 0, 0, 0.15) 1.5px,
+      transparent 1.5px);
+  background-size: 22px 22px;
+  background-color: #FAFAFA;
+  mask-image: linear-gradient(to bottom,
+      black 0%,
+      black 50%,
+      transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom,
+      black 0%,
+      black 50%,
+      transparent 100%);
+}
+
+.dark .dot-grid-bg {
+  background-image: radial-gradient(circle,
+      rgba(255, 255, 255, 0.18) 1.5px,
+      transparent 1.5px);
+  background-size: 22px 22px;
+  background-color: #0A0A0B;
+}
+
+/* ── Glass Card ── */
+.glass-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 16px;
+}
+
+/* ── Neumorphic Button (primary) ── */
+.btn-neumorphic {
+  background: var(--accent);
+  color: var(--background);
+  border: none;
+  border-radius: 10px;
+  padding: 12px 28px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 200ms ease;
+  box-shadow:
+    4px 4px 8px rgba(0, 0, 0, 0.15),
+    -2px -2px 6px rgba(255, 255, 255, 0.05);
+}
+
+.btn-neumorphic:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    2px 2px 4px rgba(0, 0, 0, 0.15),
+    -1px -1px 3px rgba(255, 255, 255, 0.05);
+}
+
+.dark .btn-neumorphic {
+  background: #E8E8F0;
+  color: #0A0A0B;
+  box-shadow:
+    4px 4px 8px rgba(0, 0, 0, 0.4),
+    -2px -2px 6px rgba(255, 255, 255, 0.03);
+}
+
+.dark .btn-neumorphic:hover {
+  box-shadow:
+    2px 2px 4px rgba(0, 0, 0, 0.4),
+    -1px -1px 3px rgba(255, 255, 255, 0.03);
+}
+
+/* ── Ghost Button ── */
+.btn-ghost {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 28px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 200ms ease;
+}
+
+.btn-ghost:hover {
+  background: var(--surface-elevated);
+  transform: translateY(-1px);
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ── Utility animations ── */
+@keyframes pulse-subtle {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 300ms ease forwards;
+}
