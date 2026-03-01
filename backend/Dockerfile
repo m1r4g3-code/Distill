@@ -18,8 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy python packaging files
-COPY pyproject.toml ./
+# Copy everything first so pip can find the app/ package
+COPY . .
 
 # Install python dependencies including playwright
 RUN pip install --no-cache-dir pip setuptools wheel && \
@@ -28,9 +28,6 @@ RUN pip install --no-cache-dir pip setuptools wheel && \
 # Install Playwright browser and system dependencies
 RUN playwright install chromium
 RUN playwright install-deps chromium
-
-# Copy application files
-COPY . .
 
 # Run as non-root user for security
 RUN useradd -m appuser && chown -R appuser /app /ms-playwright
