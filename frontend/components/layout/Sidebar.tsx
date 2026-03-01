@@ -1,10 +1,12 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Logo } from "@/components/shared/Logo";
 import { cn } from "@/lib/utils";
 import { DASHBOARD_NAV_ITEMS } from "@/lib/constants";
+import { createSupabaseBrowserClient } from "@/lib/supabase";
 import {
     LayoutDashboard,
     Play,
@@ -30,6 +32,36 @@ const iconMap: Record<string, React.ElementType> = {
 
 export function Sidebar() {
     const pathname = usePathname();
+    const router = useRouter();
+    const [userName, setUserName] = useState("Developer");
+    const [userEmail, setUserEmail] = useState("");
+
+    useEffect(() => {
+        const supabase = createSupabaseBrowserClient();
+        supabase.auth.getUser().then(({ data: { user } }) => {
+            if (user) {
+                setUserName(
+                    user.user_metadata?.full_name ||
+                    user.email?.split("@")[0] ||
+                    "Developer"
+                );
+                setUserEmail(user.email || "");
+            }
+        });
+    }, []);
+
+    const initials = userName
+        .split(" ")
+        .map((n) => n[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 2);
+
+    const handleSignOut = async () => {
+        const supabase = createSupabaseBrowserClient();
+        await supabase.auth.signOut();
+        router.push("/login");
+    };
 
     return (
         <aside className="hidden lg:flex flex-col w-64 h-screen border-r border-border bg-surface fixed left-0 top-0 z-40">
@@ -67,10 +99,28 @@ export function Sidebar() {
                 })}
             </nav>
 
-            {/* Bottom */}
-            <div className="p-3 border-t border-border">
-                <button className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-text-muted hover:text-text-secondary hover:bg-surface-elevated transition-colors w-full cursor-pointer">
-                    <LogOut size={18} />
+            {/* User Profile + Sign Out */}
+            <div className="p-3 border-t border-border space-y-2">
+                <div className="flex items-center gap-3 px-3 py-2">
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-accent-subtle border border-border-subtle">
+                        <span className="text-accent text-xs font-medium font-mono">
+                            {initials}
+                        </span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-text-primary truncate">
+                            {userName}
+                        </p>
+                        <span className="inline-block px-1.5 py-0.5 rounded text-text-muted text-[10px] bg-accent-subtle border border-border-subtle">
+                            Free
+                        </span>
+                    </div>
+                </div>
+                <button
+                    onClick={handleSignOut}
+                    className="flex items-center gap-3 px-3 py-2 rounded-xl text-sm text-text-muted hover:text-red-400 hover:bg-surface-elevated transition-all duration-150 w-full cursor-pointer"
+                >
+                    <LogOut size={14} />
                     Sign out
                 </button>
             </div>

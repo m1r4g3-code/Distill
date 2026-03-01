@@ -3,68 +3,151 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { z } from "zod";
 import { Logo } from "@/components/shared/Logo";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
+import { createSupabaseBrowserClient } from "@/lib/supabase";
 import { Mail, Lock, Eye, EyeOff, User } from "lucide-react";
+
+const signupSchema = z
+    .object({
+        name: z.string().min(2, "Name must be at least 2 characters"),
+        email: z.string().email("Please enter a valid email"),
+        password: z
+            .string()
+            .min(8, "Password must be at least 8 characters")
+            .regex(/\d/, "Password must contain at least one number"),
+        confirmPassword: z.string(),
+    })
+    .refine((data) => data.password === data.confirmPassword, {
+        message: "Passwords don't match",
+        path: ["confirmPassword"],
+    });
 
 export default function SignupPage() {
     const router = useRouter();
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
+    const [confirmPassword, setConfirmPassword] = useState("");
     const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState("");
+    const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(false);
+    const [success, setSuccess] = useState(false);
+
+    const handleGoogleSignUp = async () => {
+        const supabase = createSupabaseBrowserClient();
+        await supabase.auth.signInWithOAuth({
+            provider: "google",
+            options: {
+                redirectTo: `${window.location.origin}/auth/callback`,
+            },
+        });
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError("");
-        setLoading(true);
+        setFieldErrors({});
 
-        setTimeout(() => {
+        const result = signupSchema.safeParse({ name, email, password, confirmPassword });
+        if (!result.success) {
+            const errors: Record<string, string> = {};
+            result.error.issues.forEach((issue) => {
+                const field = issue.path[0] as string;
+                if (!errors[field]) errors[field] = issue.message;
+            });
+            setFieldErrors(errors);
+            return;
+        }
+
+        setLoading(true);
+        try {
+            const supabase = createSupabaseBrowserClient();
+            const { error: authError } = await supabase.auth.signUp({
+                email,
+                password,
+                options: {
+                    data: { full_name: name },
+                    emailRedirectTo: `${window.location.origin}/auth/callback`,
+                },
+            });
+
+            if (authError) {
+                setError(authError.message);
+                setLoading(false);
+                return;
+            }
+
+            setSuccess(true);
             setLoading(false);
-            router.push("/dashboard");
-        }, 1000);
+        } catch {
+            setError("An unexpected error occurred");
+            setLoading(false);
+        }
     };
 
-    return (
-        <div className="w-full max-w-md space-y-6">
-            <div className="text-center">
-                <Link href="/">
-                    <div className="inline-block">
-                        <Logo size="large" />
+    if (success) {
+        return (
+            <div className="w-full space-y-6">
+                <div className="text-center">
+                    <Link href="/"><div className="inline-block"><Logo size="large" /></div></Link>
+                </div>
+                <GlassCard className="p-8 sm:p-10 space-y-4 border border-border text-center">
+                    <div className="w-12 h-12 rounded-full bg-success/15 flex items-center justify-center mx-auto">
+                        <Mail size={20} className="text-success" />
                     </div>
-                </Link>
+                    <h2 className="text-xl font-bold text-text-primary">Check your email</h2>
+                    <p className="text-sm text-text-secondary">
+                        We sent a confirmation link to <span className="font-medium text-text-primary">{email}</span>.
+                        Click the link to activate your account.
+                    </p>
+                    <Link href="/login" className="text-sm text-text-muted hover:text-text-secondary transition-colors inline-block mt-2">
+                        ← Back to sign in
+                    </Link>
+                </GlassCard>
+            </div>
+        );
+    }
+
+    return (
+        <div className="w-full space-y-6">
+            <div className="text-center">
+                <Link href="/"><div className="inline-block"><Logo size="large" /></div></Link>
             </div>
 
-            <GlassCard className="p-8 space-y-6 border border-border">
+            <GlassCard className="p-8 sm:p-10 space-y-6 border border-border">
                 <div className="text-center">
-                    <h1 className="text-xl font-semibold text-text-primary">Create account</h1>
+                    <h1 className="text-2xl font-bold text-text-primary">Create your account</h1>
                     <p className="text-sm text-text-secondary mt-1">
-                        Start extracting web data in minutes
+                        Start extracting the web with Distill
                     </p>
                 </div>
 
-                {/* Google SSO */}
-                <button className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl border border-border bg-surface hover:bg-surface-elevated transition-colors text-sm font-medium text-text-primary cursor-pointer">
+                {/* Google OAuth */}
+                <button
+                    onClick={handleGoogleSignUp}
+                    className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl border border-border bg-surface hover:bg-surface-elevated transition-colors text-sm font-medium text-text-primary cursor-pointer"
+                >
                     <svg width="18" height="18" viewBox="0 0 48 48">
                         <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z" />
                         <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z" />
                         <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z" />
                         <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z" />
                     </svg>
-                    Sign up with Google
+                    Continue with Google
                 </button>
 
                 <div className="flex items-center gap-4">
                     <div className="flex-1 h-px bg-border" />
-                    <span className="text-xs text-text-muted">or continue with email</span>
+                    <span className="text-xs text-text-muted">or</span>
                     <div className="flex-1 h-px bg-border" />
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
-                    {/* Name */}
+                    {/* Full name */}
                     <div className="space-y-1.5">
                         <label className="text-sm font-medium text-text-secondary">Full name</label>
                         <div className="relative">
@@ -74,10 +157,10 @@ export default function SignupPage() {
                                 value={name}
                                 onChange={(e) => setName(e.target.value)}
                                 placeholder="John Doe"
-                                required
-                                className="w-full pl-10 pr-4 py-3 rounded-xl border border-border bg-surface text-text-primary placeholder:text-text-muted text-sm outline-none focus:border-accent transition-colors"
+                                className={`w-full pl-10 pr-4 py-3 rounded-xl border ${fieldErrors.name ? "border-error" : "border-border"} bg-surface text-text-primary placeholder:text-text-muted text-sm outline-none focus:border-accent transition-colors`}
                             />
                         </div>
+                        {fieldErrors.name && <p className="text-xs text-error">{fieldErrors.name}</p>}
                     </div>
 
                     {/* Email */}
@@ -89,11 +172,11 @@ export default function SignupPage() {
                                 type="email"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
-                                placeholder="you@company.com"
-                                required
-                                className="w-full pl-10 pr-4 py-3 rounded-xl border border-border bg-surface text-text-primary placeholder:text-text-muted text-sm outline-none focus:border-accent transition-colors"
+                                placeholder="you@example.com"
+                                className={`w-full pl-10 pr-4 py-3 rounded-xl border ${fieldErrors.email ? "border-error" : "border-border"} bg-surface text-text-primary placeholder:text-text-muted text-sm outline-none focus:border-accent transition-colors`}
                             />
                         </div>
+                        {fieldErrors.email && <p className="text-xs text-error">{fieldErrors.email}</p>}
                     </div>
 
                     {/* Password */}
@@ -106,28 +189,41 @@ export default function SignupPage() {
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                                 placeholder="••••••••"
-                                required
-                                minLength={8}
-                                className="w-full pl-10 pr-12 py-3 rounded-xl border border-border bg-surface text-text-primary placeholder:text-text-muted text-sm outline-none focus:border-accent transition-colors"
+                                className={`w-full pl-10 pr-12 py-3 rounded-xl border ${fieldErrors.password ? "border-error" : "border-border"} bg-surface text-text-primary placeholder:text-text-muted text-sm outline-none focus:border-accent transition-colors`}
                             />
-                            <button
-                                type="button"
-                                onClick={() => setShowPassword(!showPassword)}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-secondary cursor-pointer"
-                            >
+                            <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-secondary cursor-pointer">
                                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                             </button>
                         </div>
+                        {fieldErrors.password && <p className="text-xs text-error">{fieldErrors.password}</p>}
                     </div>
 
-                    {error && <p className="text-xs text-error">{error}</p>}
+                    {/* Confirm Password */}
+                    <div className="space-y-1.5">
+                        <label className="text-sm font-medium text-text-secondary">Confirm password</label>
+                        <div className="relative">
+                            <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                            <input
+                                type={showPassword ? "text" : "password"}
+                                value={confirmPassword}
+                                onChange={(e) => setConfirmPassword(e.target.value)}
+                                placeholder="••••••••"
+                                className={`w-full pl-10 pr-4 py-3 rounded-xl border ${fieldErrors.confirmPassword ? "border-error" : "border-border"} bg-surface text-text-primary placeholder:text-text-muted text-sm outline-none focus:border-accent transition-colors`}
+                            />
+                        </div>
+                        {fieldErrors.confirmPassword && <p className="text-xs text-error">{fieldErrors.confirmPassword}</p>}
+                    </div>
+
+                    {error && (
+                        <p className="text-xs text-error text-center py-2 px-3 rounded-lg bg-error/10">{error}</p>
+                    )}
 
                     <button
                         type="submit"
                         disabled={loading}
                         className="btn-neumorphic w-full text-sm flex items-center justify-center gap-2 disabled:opacity-60"
                     >
-                        {loading ? <LoadingSpinner size="small" /> : "Create account"}
+                        {loading ? <LoadingSpinner size="small" /> : "Sign up"}
                     </button>
                 </form>
 

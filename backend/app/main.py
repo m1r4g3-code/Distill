@@ -85,6 +85,20 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",
+            "http://localhost:3001",
+            "https://distill.vercel.app",
+            "https://*.vercel.app",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     app.add_middleware(RequestLoggingMiddleware)
 
     def _make_json_safe(content):

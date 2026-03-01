@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/shared/StatusBadge";
 import { CodeBlock } from "@/components/shared/CodeBlock";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { getJobStatus, getJobResults } from "@/lib/api-client";
+import { useAppStore } from "@/lib/store";
 import { formatDate, formatDuration } from "@/lib/utils";
 import type { JobStatusResponse, JobStatus } from "@/types";
 import { ArrowLeft, RotateCcw, Download } from "lucide-react";
@@ -16,6 +17,7 @@ import Link from "next/link";
 export default function JobDetailPage() {
     const params = useParams();
     const jobId = params.id as string;
+    const { apiKey } = useAppStore();
     const [job, setJob] = useState<JobStatusResponse | null>(null);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [results, setResults] = useState<Record<string, any> | null>(null);
@@ -25,10 +27,10 @@ export default function JobDetailPage() {
     useEffect(() => {
         async function load() {
             try {
-                const jobData = await getJobStatus(jobId);
+                const jobData = await getJobStatus(jobId, apiKey);
                 setJob(jobData);
                 if (jobData.status === "completed") {
-                    const resultData = await getJobResults(jobId);
+                    const resultData = await getJobResults(jobId, apiKey);
                     setResults(resultData as Record<string, any>);
                 }
             } catch (err) {

@@ -2,12 +2,15 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
-import { MOCK_API_KEYS } from "@/lib/constants";
+import { Skeleton } from "@/components/shared/Skeleton";
+import { useAppStore } from "@/lib/store";
+import { listApiKeys, createApiKey, revokeApiKey } from "@/lib/api-client";
 import { formatDate, maskApiKey } from "@/lib/utils";
-import { createApiKey } from "@/lib/api-client";
-import type { ApiKeyResponse, ApiKeyCreateResponse } from "@/types";
+import type { ApiKeyCreateResponse } from "@/types";
+import { toast } from "sonner";
 import {
     Key,
     Plus,
@@ -18,30 +21,52 @@ import {
     Trash2,
     X,
     AlertTriangle,
+    ShieldAlert,
 } from "lucide-react";
 
 export default function ApiKeysPage() {
-    const [keys, setKeys] = useState<ApiKeyResponse[]>(MOCK_API_KEYS);
+    const { adminKey } = useAppStore();
+    const queryClient = useQueryClient();
+
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showRevokeModal, setShowRevokeModal] = useState<string | null>(null);
     const [newKeyName, setNewKeyName] = useState("");
     const [createdKey, setCreatedKey] = useState<ApiKeyCreateResponse | null>(null);
     const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
     const [copiedId, setCopiedId] = useState<string | null>(null);
-    const [creating, setCreating] = useState(false);
 
-    const handleCreate = async () => {
-        setCreating(true);
-        const result = await createApiKey({ name: newKeyName || undefined });
-        setCreatedKey(result);
-        setKeys((prev) => [result, ...prev]);
-        setCreating(false);
-    };
+    // Fetch keys
+    const { data: keys = [], isLoading, isError, error } = useQuery({
+        queryKey: ["api-keys"],
+        queryFn: () => listApiKeys(adminKey),
+        enabled: !!adminKey,
+    });
 
-    const handleRevoke = (keyId: string) => {
-        setKeys((prev) => prev.map((k) => (k.id === keyId ? { ...k, is_active: false } : k)));
-        setShowRevokeModal(null);
-    };
+    // Create mutation
+    const createMutation = useMutation({
+        mutationFn: (name: string) => createApiKey({ name: name || undefined }, adminKey),
+        onSuccess: (data) => {
+            setCreatedKey(data);
+            queryClient.invalidateQueries({ queryKey: ["api-keys"] });
+            toast.success(`API key "${data.name}" created`);
+        },
+        onError: () => {
+            toast.error("Failed to create API key");
+        },
+    });
+
+    // Revoke mutation
+    const revokeMutation = useMutation({
+        mutationFn: (keyId: string) => revokeApiKey(keyId, adminKey),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["api-keys"] });
+            setShowRevokeModal(null);
+            toast.success("API key revoked");
+        },
+        onError: () => {
+            toast.error("Failed to revoke API key");
+        },
+    });
 
     const handleCopy = (text: string, id: string) => {
         navigator.clipboard.writeText(text);
@@ -57,6 +82,23 @@ export default function ApiKeysPage() {
             return next;
         });
     };
+
+    // No admin key configured
+    if (!adminKey) {
+        return (
+            <div className="max-w-4xl mx-auto space-y-6">
+                <h1 className="text-2xl font-bold text-text-primary">API Keys</h1>
+                <GlassCard className="text-center py-12 space-y-4">
+                    <ShieldAlert size={48} className="mx-auto text-text-muted opacity-40" />
+                    <h2 className="text-lg font-semibold text-text-primary">Admin key required</h2>
+                    <p className="text-sm text-text-secondary max-w-md mx-auto">
+                        API key management requires an admin key. Enter your admin key in the API Key modal
+                        or in Settings to manage keys.
+                    </p>
+                </GlassCard>
+            </div>
+        );
+    }
 
     return (
         <div className="max-w-4xl mx-auto space-y-6">
@@ -75,79 +117,116 @@ export default function ApiKeysPage() {
                 </button>
             </div>
 
-            {/* Key Cards */}
-            <div className="space-y-3">
-                {keys.map((key) => (
-                    <GlassCard key={key.id} className="space-y-3">
-                        <div className="flex items-center justify-between">
+            {/* Loading skeleton */}
+            {isLoading && (
+                <div className="space-y-3">
+                    {[1, 2].map((i) => (
+                        <GlassCard key={i} className="space-y-3">
                             <div className="flex items-center gap-3">
-                                <div
-                                    className={`p-2 rounded-lg ${key.is_active ? "bg-success/15" : "bg-error/15"
-                                        }`}
-                                >
-                                    <Key
-                                        size={16}
-                                        className={key.is_active ? "text-success" : "text-error"}
-                                    />
-                                </div>
-                                <div>
-                                    <h3 className="font-medium text-text-primary text-sm">{key.name}</h3>
-                                    <span
-                                        className={`text-xs ${key.is_active ? "text-success" : "text-error"
-                                            }`}
-                                    >
-                                        {key.is_active ? "Active" : "Revoked"}
-                                    </span>
+                                <Skeleton className="w-10 h-10 rounded-lg" />
+                                <div className="flex-1 space-y-2">
+                                    <Skeleton className="h-4 w-32" />
+                                    <Skeleton className="h-3 w-20" />
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                                <button
-                                    onClick={() => toggleReveal(key.id)}
-                                    className="p-1.5 text-text-muted hover:text-text-secondary transition-colors cursor-pointer"
-                                >
-                                    {revealedKeys.has(key.id) ? <EyeOff size={14} /> : <Eye size={14} />}
-                                </button>
-                                <button
-                                    onClick={() => handleCopy(key.id, key.id)}
-                                    className="p-1.5 text-text-muted hover:text-text-secondary transition-colors cursor-pointer"
-                                >
-                                    {copiedId === key.id ? <Check size={14} /> : <Copy size={14} />}
-                                </button>
-                                {key.is_active && (
+                            <Skeleton className="h-3 w-full" />
+                        </GlassCard>
+                    ))}
+                </div>
+            )}
+
+            {/* Error state */}
+            {isError && (
+                <GlassCard className="text-center py-8 space-y-3">
+                    <AlertTriangle size={32} className="mx-auto text-error" />
+                    <p className="text-sm text-error">Failed to load API keys</p>
+                    <p className="text-xs text-text-muted">{(error as Error)?.message}</p>
+                    <button
+                        onClick={() => queryClient.invalidateQueries({ queryKey: ["api-keys"] })}
+                        className="btn-ghost text-sm"
+                    >
+                        Retry
+                    </button>
+                </GlassCard>
+            )}
+
+            {/* Empty state */}
+            {!isLoading && !isError && keys.length === 0 && (
+                <GlassCard className="text-center py-12 space-y-4">
+                    <Key size={48} className="mx-auto text-text-muted opacity-40" />
+                    <h2 className="text-lg font-semibold text-text-primary">No API keys yet</h2>
+                    <p className="text-sm text-text-secondary">
+                        Create your first API key to start making requests.
+                    </p>
+                </GlassCard>
+            )}
+
+            {/* Key Cards */}
+            {!isLoading && !isError && keys.length > 0 && (
+                <div className="space-y-3">
+                    {keys.map((key) => (
+                        <GlassCard key={key.id} className="space-y-3">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <div className={`p-2 rounded-lg ${key.is_active ? "bg-success/15" : "bg-error/15"}`}>
+                                        <Key size={16} className={key.is_active ? "text-success" : "text-error"} />
+                                    </div>
+                                    <div>
+                                        <h3 className="font-medium text-text-primary text-sm">{key.name}</h3>
+                                        <span className={`text-xs ${key.is_active ? "text-success" : "text-error"}`}>
+                                            {key.is_active ? "Active" : "Revoked"}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2">
                                     <button
-                                        onClick={() => setShowRevokeModal(key.id)}
-                                        className="p-1.5 text-text-muted hover:text-error transition-colors cursor-pointer"
+                                        onClick={() => toggleReveal(key.id)}
+                                        className="p-1.5 text-text-muted hover:text-text-secondary transition-colors cursor-pointer"
                                     >
-                                        <Trash2 size={14} />
+                                        {revealedKeys.has(key.id) ? <EyeOff size={14} /> : <Eye size={14} />}
                                     </button>
-                                )}
-                            </div>
-                        </div>
-
-                        <div className="flex flex-wrap gap-4 text-xs text-text-muted">
-                            <span>
-                                Key: <code className="font-mono">{revealedKeys.has(key.id) ? `sk_${key.id}` : maskApiKey(`sk_${key.id}_mockkey`)}</code>
-                            </span>
-                            <span>Rate limit: {key.rate_limit}/min</span>
-                            <span>Created: {formatDate(key.created_at)}</span>
-                            {key.last_used_at && <span>Last used: {formatDate(key.last_used_at)}</span>}
-                        </div>
-
-                        {key.scopes && (
-                            <div className="flex flex-wrap gap-1.5">
-                                {key.scopes.map((scope) => (
-                                    <span
-                                        key={scope}
-                                        className="px-2 py-0.5 rounded-md bg-accent-subtle text-xs text-text-secondary"
+                                    <button
+                                        onClick={() => handleCopy(key.id, key.id)}
+                                        className="p-1.5 text-text-muted hover:text-text-secondary transition-colors cursor-pointer"
                                     >
-                                        {scope}
-                                    </span>
-                                ))}
+                                        {copiedId === key.id ? <Check size={14} /> : <Copy size={14} />}
+                                    </button>
+                                    {key.is_active && (
+                                        <button
+                                            onClick={() => setShowRevokeModal(key.id)}
+                                            className="p-1.5 text-text-muted hover:text-error transition-colors cursor-pointer"
+                                        >
+                                            <Trash2 size={14} />
+                                        </button>
+                                    )}
+                                </div>
                             </div>
-                        )}
-                    </GlassCard>
-                ))}
-            </div>
+
+                            <div className="flex flex-wrap gap-4 text-xs text-text-muted">
+                                <span>
+                                    ID: <code className="font-mono">{revealedKeys.has(key.id) ? key.id : maskApiKey(key.id)}</code>
+                                </span>
+                                <span>Rate limit: {key.rate_limit}/min</span>
+                                <span>Created: {formatDate(key.created_at)}</span>
+                                {key.last_used_at && <span>Last used: {formatDate(key.last_used_at)}</span>}
+                            </div>
+
+                            {key.scopes && (
+                                <div className="flex flex-wrap gap-1.5">
+                                    {key.scopes.map((scope) => (
+                                        <span
+                                            key={scope}
+                                            className="px-2 py-0.5 rounded-md bg-accent-subtle text-xs text-text-secondary"
+                                        >
+                                            {scope}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+                        </GlassCard>
+                    ))}
+                </div>
+            )}
 
             {/* Create Modal */}
             <AnimatePresence>
@@ -187,15 +266,16 @@ export default function ApiKeysPage() {
                                             value={newKeyName}
                                             onChange={(e) => setNewKeyName(e.target.value)}
                                             placeholder="e.g. Production Key"
+                                            onKeyDown={(e) => e.key === "Enter" && createMutation.mutate(newKeyName)}
                                             className="w-full px-4 py-3 rounded-xl border border-border bg-surface text-text-primary placeholder:text-text-muted text-sm outline-none focus:border-accent transition-colors"
                                         />
                                     </div>
                                     <button
-                                        onClick={handleCreate}
-                                        disabled={creating}
+                                        onClick={() => createMutation.mutate(newKeyName)}
+                                        disabled={createMutation.isPending}
                                         className="btn-neumorphic w-full text-sm flex items-center justify-center gap-2 disabled:opacity-60"
                                     >
-                                        {creating ? <LoadingSpinner size="small" /> : "Create key"}
+                                        {createMutation.isPending ? <LoadingSpinner size="small" /> : "Create key"}
                                     </button>
                                 </>
                             ) : (
@@ -261,10 +341,11 @@ export default function ApiKeysPage() {
                                     Cancel
                                 </button>
                                 <button
-                                    onClick={() => handleRevoke(showRevokeModal)}
-                                    className="flex-1 px-4 py-2.5 rounded-xl bg-error text-white text-sm font-medium hover:bg-error/90 transition-colors cursor-pointer"
+                                    onClick={() => revokeMutation.mutate(showRevokeModal)}
+                                    disabled={revokeMutation.isPending}
+                                    className="flex-1 px-4 py-2.5 rounded-xl bg-error text-white text-sm font-medium hover:bg-error/90 transition-colors cursor-pointer disabled:opacity-60 flex items-center justify-center gap-2"
                                 >
-                                    Revoke
+                                    {revokeMutation.isPending ? <LoadingSpinner size="small" /> : "Revoke"}
                                 </button>
                             </div>
                         </motion.div>
