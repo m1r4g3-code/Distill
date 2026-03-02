@@ -1,7 +1,7 @@
 import secrets
 import httpx
-from datetime import datetime
-from typing import List
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, status
 from pydantic import BaseModel
@@ -175,3 +175,199 @@ async def revoke_user_key(
     api_key.is_active = False
     await session.commit()
     return None
+
+
+# ── GET /auth/jobs ────────────────────────────────────────────────────────────
+
+class JobSummary(BaseModel):
+    job_id: str
+    type: str
+    status: str
+    url: Optional[str] = None
+    query: Optional[str] = None
+    pages_discovered: int
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+@router.options("/jobs")
+async def jobs_options():
+    return {"message": "OK"}
+
+
+@router.get("/jobs", response_model=List[JobSummary])
+async def list_user_jobs(
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session)
+):
+    from app.db.models import Job
+    user_id = await verify_supabase_jwt(authorization)
+
+    # Get all api_key ids for this user
+    keys_result = await session.execute(
+        select(ApiKey.id).where(ApiKey.user_id == user_id)
+    )
+    key_ids = [row[0] for row in keys_result.all()]
+
+    if not key_ids:
+        return []
+
+    jobs_result = await session.execute(
+        select(Job)
+        .where(Job.api_key_id.in_(key_ids))
+        .order_by(Job.created_at.desc())
+        .limit(200)
+    )
+    jobs = jobs_result.scalars().all()
+
+    return [
+        JobSummary(
+            job_id=str(j.id),
+            type=j.type,
+            status=j.status,
+            url=j.input_params.get("url") if j.input_params else None,
+            query=j.input_params.get("query") if j.input_params else None,
+            pages_discovered=j.pages_discovered,
+            created_at=j.created_at,
+            completed_at=j.completed_at,
+        )
+        for j in jobs
+    ]
+
+
+# ── GET /auth/usage ───────────────────────────────────────────────────────────
+
+class DailyPoint(BaseModel):
+    date: str
+    requests: int
+    success: int
+
+
+class EndpointStat(BaseModel):
+    endpoint: str
+    count: int
+
+
+class UsageStats(BaseModel):
+    total_requests: int
+    success_rate: float
+    total_jobs: int
+    pages_extracted: int
+    cache_hits: int
+    requests_over_time: List[DailyPoint]
+    requests_by_endpoint: List[EndpointStat]
+    top_urls: List[dict]
+
+
+@router.options("/usage")
+async def usage_options():
+    return {"message": "OK"}
+
+
+@router.get("/usage", response_model=UsageStats)
+async def get_user_usage(
+    authorization: str | None = Header(default=None),
+    period: str = "7d",
+    session: AsyncSession = Depends(get_session)
+):
+    from app.db.models import Job
+    from sqlalchemy import func, case
+    user_id = await verify_supabase_jwt(authorization)
+
+    # Get all api_key ids for this user
+    keys_result = await session.execute(
+        select(ApiKey.id).where(ApiKey.user_id == user_id)
+    )
+    key_ids = [row[0] for row in keys_result.all()]
+
+    if not key_ids:
+        return UsageStats(
+            total_requests=0, success_rate=0.0, total_jobs=0,
+            pages_extracted=0, cache_hits=0,
+            requests_over_time=[], requests_by_endpoint=[],
+            top_urls=[]
+        )
+
+    # Determine date range
+    days = 30 if period == "30d" else (90 if period == "90d" else 7)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # Job aggregates
+    agg = await session.execute(
+        select(
+            func.count(Job.id).label("total"),
+            func.sum(case((Job.status == "completed", 1), else_=0)).label("completed"),
+            func.sum(Job.pages_discovered).label("pages"),
+        )
+        .where(Job.api_key_id.in_(key_ids))
+        .where(Job.created_at >= since)
+    )
+    row = agg.one()
+    total_jobs = row.total or 0
+    completed_jobs = row.completed or 0
+    pages_extracted = row.pages or 0
+    success_rate = round((completed_jobs / total_jobs * 100), 1) if total_jobs > 0 else 0.0
+
+    # Requests by endpoint (job type)
+    by_type = await session.execute(
+        select(Job.type, func.count(Job.id).label("cnt"))
+        .where(Job.api_key_id.in_(key_ids))
+        .where(Job.created_at >= since)
+        .group_by(Job.type)
+    )
+    requests_by_endpoint = [
+        EndpointStat(endpoint=r.type.replace("_", " ").title(), count=r.cnt)
+        for r in by_type.all()
+    ]
+
+    # Daily time series
+    daily = await session.execute(
+        select(
+            func.date_trunc("day", Job.created_at).label("day"),
+            func.count(Job.id).label("total"),
+            func.sum(case((Job.status == "completed", 1), else_=0)).label("success"),
+        )
+        .where(Job.api_key_id.in_(key_ids))
+        .where(Job.created_at >= since)
+        .group_by(func.date_trunc("day", Job.created_at))
+        .order_by(func.date_trunc("day", Job.created_at))
+    )
+    daily_rows = daily.all()
+
+    # Fill in any missing days
+    date_map: dict[str, tuple[int, int]] = {}
+    for r in daily_rows:
+        key = r.day.strftime("%b %d") if r.day else "?"
+        date_map[key] = (r.total or 0, r.success or 0)
+
+    requests_over_time: List[DailyPoint] = []
+    for i in range(days):
+        d = (datetime.now(timezone.utc) - timedelta(days=days - 1 - i)).strftime("%b %d")
+        t, s = date_map.get(d, (0, 0))
+        requests_over_time.append(DailyPoint(date=d, requests=t, success=s))
+
+    # Top URLs from job input_params
+    top_urls_result = await session.execute(
+        select(Job.input_params, func.count(Job.id).label("cnt"))
+        .where(Job.api_key_id.in_(key_ids))
+        .where(Job.created_at >= since)
+        .group_by(Job.input_params)
+        .order_by(func.count(Job.id).desc())
+        .limit(5)
+    )
+    top_urls = []
+    for r in top_urls_result.all():
+        url = (r.input_params or {}).get("url")
+        if url:
+            top_urls.append({"url": url, "count": r.cnt})
+
+    return UsageStats(
+        total_requests=total_jobs,
+        success_rate=success_rate,
+        total_jobs=total_jobs,
+        pages_extracted=int(pages_extracted),
+        cache_hits=0,  # Cache tracking not yet implemented in DB
+        requests_over_time=requests_over_time,
+        requests_by_endpoint=requests_by_endpoint,
+        top_urls=top_urls,
+    )

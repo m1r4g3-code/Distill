@@ -2,7 +2,11 @@
 
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
+import { useQuery } from "@tanstack/react-query";
 import { GlassCard } from "@/components/shared/GlassCard";
+import { Skeleton } from "@/components/shared/Skeleton";
+import { createSupabaseBrowserClient } from "@/lib/supabase";
+import { fetchUserUsage } from "@/lib/api-client";
 import {
     CreditCard,
     Check,
@@ -11,7 +15,6 @@ import {
     Star,
     Clock,
     FileText,
-    Download,
 } from "lucide-react";
 
 const fadeUp = {
@@ -29,7 +32,7 @@ const plans = [
         price: "$0",
         period: "forever",
         current: true,
-        features: ["60 requests/minute", "100 pages/month", "All endpoints", "Community support"],
+        features: ["60 requests/minute", "Unlimited pages", "All endpoints", "Community support"],
     },
     {
         name: "Pro",
@@ -37,20 +40,15 @@ const plans = [
         period: "/month",
         current: false,
         popular: true,
-        features: ["300 requests/minute", "10,000 pages/month", "Priority processing", "Email support", "Custom rate limits"],
+        features: ["300 requests/minute", "Priority processing", "Email support", "Custom rate limits"],
     },
     {
         name: "Enterprise",
         price: "Custom",
         period: "",
         current: false,
-        features: ["Unlimited requests", "Unlimited pages", "Dedicated infrastructure", "SLA guarantee", "Dedicated account manager", "Custom integrations"],
+        features: ["Unlimited requests", "Dedicated infrastructure", "SLA guarantee", "Dedicated account manager", "Custom integrations"],
     },
-];
-
-const usageBars = [
-    { label: "Requests used", current: 847, max: 1000 },
-    { label: "Pages extracted", current: 8942, max: 10000 },
 ];
 
 function getBarColor(percent: number) {
@@ -61,7 +59,7 @@ function getBarColor(percent: number) {
 
 function AnimatedBar({ current, max }: { current: number; max: number }) {
     const [width, setWidth] = useState(0);
-    const percent = (current / max) * 100;
+    const percent = max > 0 ? Math.min((current / max) * 100, 100) : 0;
     const color = getBarColor(percent);
 
     useEffect(() => {
@@ -83,13 +81,26 @@ function AnimatedBar({ current, max }: { current: number; max: number }) {
     );
 }
 
-const invoices = [
-    { date: "Mar 1, 2025", amount: "$0.00", status: "Paid", id: "INV-001" },
-    { date: "Feb 1, 2025", amount: "$0.00", status: "Paid", id: "INV-002" },
-    { date: "Jan 1, 2025", amount: "$0.00", status: "Paid", id: "INV-003" },
-];
+async function getToken() {
+    const supabase = createSupabaseBrowserClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token ?? null;
+}
 
 export default function BillingPage() {
+    const { data: usage, isLoading } = useQuery({
+        queryKey: ["usage", "30d"],
+        queryFn: async () => {
+            const token = await getToken();
+            if (!token) return null;
+            return fetchUserUsage(token, "30d");
+        },
+        staleTime: 60_000,
+    });
+
+    const totalRequests = usage?.total_requests ?? 0;
+    const pagesExtracted = usage?.pages_extracted ?? 0;
+
     return (
         <div className="max-w-4xl mx-auto space-y-6">
             <motion.h1 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-2xl font-bold text-text-primary">
@@ -108,24 +119,36 @@ export default function BillingPage() {
                             <p className="text-sm text-text-secondary">Free tier</p>
                         </div>
                     </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-5">
-                        {usageBars.map((bar) => (
-                            <div key={bar.label} className="space-y-2">
-                                <p className="text-xs text-text-muted">{bar.label}</p>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-6 mt-5">
+                        {/* Requests this month */}
+                        <div className="space-y-2">
+                            <p className="text-xs text-text-muted">Requests (30 days)</p>
+                            {isLoading ? (
+                                <Skeleton className="h-6 w-24" />
+                            ) : (
                                 <p className="text-lg font-semibold text-text-primary font-mono">
-                                    {bar.current.toLocaleString()} / {bar.max.toLocaleString()}
+                                    {totalRequests.toLocaleString()}
                                 </p>
-                                <AnimatedBar current={bar.current} max={bar.max} />
-                            </div>
-                        ))}
+                            )}
+                            <AnimatedBar current={totalRequests} max={Math.max(totalRequests, 1000)} />
+                        </div>
+                        {/* Pages extracted */}
+                        <div className="space-y-2">
+                            <p className="text-xs text-text-muted">Pages extracted (30 days)</p>
+                            {isLoading ? (
+                                <Skeleton className="h-6 w-24" />
+                            ) : (
+                                <p className="text-lg font-semibold text-text-primary font-mono">
+                                    {pagesExtracted.toLocaleString()}
+                                </p>
+                            )}
+                            <AnimatedBar current={pagesExtracted} max={Math.max(pagesExtracted, 1000)} />
+                        </div>
+                        {/* Rate limit */}
                         <div className="space-y-2">
                             <p className="text-xs text-text-muted">Rate limit</p>
-                            <p className="text-lg font-semibold text-text-primary font-mono">60/min</p>
-                        </div>
-                        <div className="space-y-2">
-                            <p className="text-xs text-text-muted">Resets in</p>
                             <p className="text-lg font-semibold text-text-primary flex items-center gap-2">
-                                <Clock size={16} className="text-text-muted" /> 28 days
+                                <Clock size={16} className="text-text-muted" /> 60/min
                             </p>
                         </div>
                     </div>
@@ -139,11 +162,8 @@ export default function BillingPage() {
                     {plans.map((plan) => (
                         <div
                             key={plan.name}
-                            className={`glass-card p-6 space-y-4 relative transition-all duration-200 hover:-translate-y-0.5 ${plan.popular ? "!border-indigo-400/30" : plan.current ? "!border-border" : ""
-                                }`}
-                            style={{
-                                boxShadow: plan.popular ? "0 0 25px rgba(129,140,248,0.1), 0 0 60px rgba(129,140,248,0.04)" : "none",
-                            }}
+                            className={`glass-card p-6 space-y-4 relative transition-all duration-200 hover:-translate-y-0.5 ${plan.popular ? "!border-indigo-400/30" : ""}`}
+                            style={{ boxShadow: plan.popular ? "0 0 25px rgba(129,140,248,0.1), 0 0 60px rgba(129,140,248,0.04)" : "none" }}
                         >
                             {plan.popular && (
                                 <div className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold text-white"
@@ -172,18 +192,13 @@ export default function BillingPage() {
                                 ))}
                             </ul>
                             {plan.current ? (
-                                <button disabled className="w-full py-2.5 rounded-lg text-sm text-text-muted cursor-not-allowed border border-border-subtle">
-                                    Current plan
-                                </button>
+                                <button disabled className="w-full py-2.5 rounded-lg text-sm text-text-muted cursor-not-allowed border border-border-subtle">Current plan</button>
                             ) : plan.name === "Enterprise" ? (
                                 <button className="btn-ghost w-full py-2.5 rounded-lg text-sm">Contact sales</button>
                             ) : (
                                 <button
                                     className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 cursor-pointer transition-all duration-150 text-white"
-                                    style={{
-                                        background: "linear-gradient(135deg, #818cf8, #6366f1)",
-                                        boxShadow: "0 2px 12px rgba(99,102,241,0.3)",
-                                    }}
+                                    style={{ background: "linear-gradient(135deg, #818cf8, #6366f1)", boxShadow: "0 2px 12px rgba(99,102,241,0.3)" }}
                                 >
                                     <Zap size={14} /> Upgrade
                                 </button>
@@ -214,37 +229,8 @@ export default function BillingPage() {
                         <div className="p-2 rounded-xl bg-accent-subtle"><FileText size={18} className="text-accent" /></div>
                         <h2 className="font-semibold text-text-primary">Billing History</h2>
                     </div>
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead>
-                                <tr className="border-b border-border-subtle">
-                                    <th className="pb-2 text-left font-medium text-text-muted text-[11px] tracking-wider uppercase">Date</th>
-                                    <th className="pb-2 text-left font-medium text-text-muted text-[11px] tracking-wider uppercase">Invoice</th>
-                                    <th className="pb-2 text-left font-medium text-text-muted text-[11px] tracking-wider uppercase">Amount</th>
-                                    <th className="pb-2 text-left font-medium text-text-muted text-[11px] tracking-wider uppercase">Status</th>
-                                    <th className="pb-2 text-right font-medium text-text-muted text-[11px] tracking-wider uppercase"></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {invoices.map((inv) => (
-                                    <tr key={inv.id} className="border-b border-border-subtle">
-                                        <td className="py-3 text-text-secondary">{inv.date}</td>
-                                        <td className="py-3 text-text-muted text-xs font-mono">{inv.id}</td>
-                                        <td className="py-3 text-text-primary font-medium font-mono">{inv.amount}</td>
-                                        <td className="py-3">
-                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs text-success bg-success/10">
-                                                <Check size={10} /> {inv.status}
-                                            </span>
-                                        </td>
-                                        <td className="py-3 text-right">
-                                            <button className="p-1.5 text-text-muted hover:text-text-secondary transition-colors cursor-pointer">
-                                                <Download size={14} />
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                    <div className="text-center py-8 text-text-muted">
+                        <p className="text-sm">No billing history — you&apos;re on the free plan.</p>
                     </div>
                 </GlassCard>
             </motion.div>

@@ -1,16 +1,17 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { StatusBadge } from "@/components/shared/StatusBadge";
+import { Skeleton } from "@/components/shared/Skeleton";
+import { createSupabaseBrowserClient } from "@/lib/supabase";
+import { fetchUserUsage, fetchUserJobs } from "@/lib/api-client";
 import { useAppStore } from "@/lib/store";
-import { MOCK_USAGE_DATA } from "@/lib/constants";
 import { getGreeting, formatDate } from "@/lib/utils";
 import {
-    TrendingUp,
-    TrendingDown,
     Briefcase,
     CheckCircle2,
     FileText,
@@ -18,6 +19,7 @@ import {
     Globe,
     Search,
     Bot,
+    RefreshCw,
 } from "lucide-react";
 import {
     AreaChart,
@@ -25,68 +27,9 @@ import {
     XAxis,
     Tooltip,
     ResponsiveContainer,
-    LineChart,
-    Line,
 } from "recharts";
 import type { JobStatus } from "@/types";
 
-/* ── count-up hook ── */
-function useCountUp(end: number, duration = 1500) {
-    const [value, setValue] = useState(0);
-    const started = useRef(false);
-
-    useEffect(() => {
-        if (started.current) return;
-        started.current = true;
-        const start = performance.now();
-        const step = (now: number) => {
-            const progress = Math.min((now - start) / duration, 1);
-            const eased = 1 - Math.pow(1 - progress, 3);
-            setValue(Math.round(eased * end));
-            if (progress < 1) requestAnimationFrame(step);
-        };
-        requestAnimationFrame(step);
-    }, [end, duration]);
-
-    return { value };
-}
-
-/* ── sparkline data ── */
-const sparkData = {
-    totalJobs: [
-        { v: 40 }, { v: 55 }, { v: 48 }, { v: 62 }, { v: 58 }, { v: 70 }, { v: 65 }, { v: 80 },
-    ],
-    successRate: [
-        { v: 95 }, { v: 96 }, { v: 94 }, { v: 97 }, { v: 96 }, { v: 98 }, { v: 97 }, { v: 97 },
-    ],
-    pagesExtracted: [
-        { v: 200 }, { v: 350 }, { v: 280 }, { v: 420 }, { v: 380 }, { v: 500 }, { v: 450 }, { v: 520 },
-    ],
-    cacheHitRate: [
-        { v: 38 }, { v: 36 }, { v: 34 }, { v: 35 }, { v: 33 }, { v: 34 }, { v: 32 }, { v: 33 },
-    ],
-};
-
-/* ── Sparkline ── */
-function Sparkline({ data }: { data: { v: number }[] }) {
-    return (
-        <div style={{ width: 80, height: 40 }}>
-            <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data}>
-                    <Line
-                        type="monotone"
-                        dataKey="v"
-                        stroke="var(--text-muted)"
-                        strokeWidth={1.5}
-                        dot={false}
-                    />
-                </LineChart>
-            </ResponsiveContainer>
-        </div>
-    );
-}
-
-/* ── Custom tooltip for usage chart ── */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function GlassTooltip({ active, payload, label }: any) {
     if (!active || !payload?.length) return null;
@@ -97,7 +40,6 @@ function GlassTooltip({ active, payload, label }: any) {
                 border: "1px solid var(--border)",
                 borderRadius: 8,
                 padding: "8px 12px",
-                boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
             }}
         >
             <p style={{ color: "var(--text-muted)", fontSize: 11, marginBottom: 4 }}>{label}</p>
@@ -117,52 +59,60 @@ const fadeUp = {
     }),
 };
 
+async function getToken() {
+    const supabase = createSupabaseBrowserClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token ?? null;
+}
+
 export default function DashboardPage() {
-    const { user, trackedJobs } = useAppStore();
-    const recentJobs = trackedJobs.slice(0, 5);
-    const stats = {
-        totalJobs: trackedJobs.length,
-        successRate: trackedJobs.length > 0
-            ? (trackedJobs.filter(j => j.status === 'completed').length / trackedJobs.length) * 100
-            : 0,
-        pagesExtracted: 0,
-        cacheHitRate: 0,
-    };
+    const { user } = useAppStore();
     const [period, setPeriod] = useState("7d");
 
-    const totalJobs = useCountUp(stats.totalJobs);
-    const successRate = useCountUp(Math.round(stats.successRate * 10));
-    const pagesExtracted = useCountUp(stats.pagesExtracted);
-    const cacheHitRate = useCountUp(Math.round(stats.cacheHitRate * 10));
+    const { data: usage, isLoading: usageLoading } = useQuery({
+        queryKey: ["usage", period],
+        queryFn: async () => {
+            const token = await getToken();
+            if (!token) return null;
+            return fetchUserUsage(token, period);
+        },
+        staleTime: 30_000,
+        refetchInterval: 60_000,
+    });
+
+    const { data: jobs = [], isLoading: jobsLoading } = useQuery({
+        queryKey: ["jobs"],
+        queryFn: async () => {
+            const token = await getToken();
+            if (!token) return [];
+            return fetchUserJobs(token);
+        },
+        staleTime: 10_000,
+        refetchInterval: 30_000,
+    });
+
+    const recentJobs = jobs.slice(0, 5);
 
     const statCards = [
         {
             label: "Total Jobs",
-            value: totalJobs.value.toLocaleString(),
-            change: 12.5,
+            value: usage?.total_jobs?.toLocaleString() ?? "—",
             icon: Briefcase,
-            sparkline: sparkData.totalJobs,
         },
         {
             label: "Success Rate",
-            value: `${(successRate.value / 10).toFixed(1)}%`,
-            change: 1.2,
+            value: usage ? `${usage.success_rate.toFixed(1)}%` : "—",
             icon: CheckCircle2,
-            sparkline: sparkData.successRate,
         },
         {
             label: "Pages Extracted",
-            value: pagesExtracted.value.toLocaleString(),
-            change: 18.3,
+            value: usage?.pages_extracted?.toLocaleString() ?? "—",
             icon: FileText,
-            sparkline: sparkData.pagesExtracted,
         },
         {
-            label: "Cache Hit Rate",
-            value: `${(cacheHitRate.value / 10).toFixed(1)}%`,
-            change: -2.1,
+            label: "Cache Hits",
+            value: usage?.cache_hits?.toLocaleString() ?? "—",
             icon: Database,
-            sparkline: sparkData.cacheHitRate,
         },
     ];
 
@@ -199,19 +149,13 @@ export default function DashboardPage() {
                                 <span className="text-sm text-text-secondary">{card.label}</span>
                                 <card.icon size={18} className="text-text-muted" />
                             </div>
-                            <div className="text-4xl font-bold text-text-primary mt-2">
-                                {card.value}
-                            </div>
-                            <div className="flex items-end justify-between mt-3">
-                                <span
-                                    className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-md ${card.change >= 0 ? "text-success bg-success/15" : "text-error bg-error/15"
-                                        }`}
-                                >
-                                    {card.change >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-                                    {Math.abs(card.change)}%
-                                </span>
-                                <Sparkline data={card.sparkline} />
-                            </div>
+                            {usageLoading ? (
+                                <Skeleton className="h-8 w-20 mt-2" />
+                            ) : (
+                                <div className="text-4xl font-bold text-text-primary mt-2">
+                                    {card.value}
+                                </div>
+                            )}
                         </GlassCard>
                     </motion.div>
                 ))}
@@ -258,32 +202,41 @@ export default function DashboardPage() {
                         </div>
                     </div>
                     <div style={{ height: 200 }}>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={MOCK_USAGE_DATA.requestsOverTime}>
-                                <defs>
-                                    <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.15} />
-                                        <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
-                                    </linearGradient>
-                                </defs>
-                                <XAxis
-                                    dataKey="date"
-                                    tick={{ fill: "var(--text-muted)", fontSize: 11 }}
-                                    axisLine={false}
-                                    tickLine={false}
-                                />
-                                <Tooltip content={<GlassTooltip />} />
-                                <Area
-                                    type="monotone"
-                                    dataKey="requests"
-                                    stroke="var(--accent)"
-                                    strokeWidth={2}
-                                    fill="url(#areaFill)"
-                                    dot={false}
-                                    activeDot={{ r: 4, fill: "var(--accent)", strokeWidth: 0 }}
-                                />
-                            </AreaChart>
-                        </ResponsiveContainer>
+                        {usageLoading ? (
+                            <Skeleton className="h-full w-full rounded-xl" />
+                        ) : (usage?.requests_over_time?.length ?? 0) > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={usage!.requests_over_time}>
+                                    <defs>
+                                        <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.15} />
+                                            <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <XAxis
+                                        dataKey="date"
+                                        tick={{ fill: "var(--text-muted)", fontSize: 11 }}
+                                        axisLine={false}
+                                        tickLine={false}
+                                    />
+                                    <Tooltip content={<GlassTooltip />} />
+                                    <Area
+                                        type="monotone"
+                                        dataKey="requests"
+                                        stroke="var(--accent)"
+                                        strokeWidth={2}
+                                        fill="url(#areaFill)"
+                                        dot={false}
+                                        activeDot={{ r: 4, fill: "var(--accent)", strokeWidth: 0 }}
+                                    />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <div className="h-full flex flex-col items-center justify-center text-text-muted gap-2">
+                                <RefreshCw size={24} className="opacity-30" />
+                                <p className="text-sm">No data yet — run your first request in the Playground!</p>
+                            </div>
+                        )}
                     </div>
                 </GlassCard>
             </motion.div>
@@ -298,43 +251,49 @@ export default function DashboardPage() {
                         </Link>
                     </div>
 
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead>
-                                <tr className="text-left text-text-muted text-xs uppercase tracking-wider">
-                                    <th className="pb-3 font-medium">Type</th>
-                                    <th className="pb-3 font-medium">Status</th>
-                                    <th className="pb-3 font-medium hidden sm:table-cell">URL/Query</th>
-                                    <th className="pb-3 font-medium hidden md:table-cell">Created</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-border-subtle">
-                                {recentJobs.map((job) => (
-                                    <tr key={job.jobId} className="hover:bg-surface-elevated/50 transition-colors cursor-pointer">
-                                        <td className="py-3">
-                                            <span className="text-text-primary font-medium capitalize">
-                                                {job.type.replace("_", " ")}
-                                            </span>
-                                        </td>
-                                        <td className="py-3">
-                                            <StatusBadge status={job.status as JobStatus} />
-                                        </td>
-                                        <td className="py-3 hidden sm:table-cell text-text-secondary text-xs font-mono truncate max-w-[200px]">
-                                            {job.url || job.query || job.jobId.slice(0, 12) + "..."}
-                                        </td>
-                                        <td className="py-3 hidden md:table-cell text-text-muted text-xs">
-                                            {formatDate(job.createdAt)}
-                                        </td>
+                    {jobsLoading ? (
+                        <div className="space-y-3">
+                            {[1, 2, 3].map((i) => (
+                                <Skeleton key={i} className="h-10 w-full" />
+                            ))}
+                        </div>
+                    ) : recentJobs.length > 0 ? (
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="text-left text-text-muted text-xs uppercase tracking-wider">
+                                        <th className="pb-3 font-medium">Type</th>
+                                        <th className="pb-3 font-medium">Status</th>
+                                        <th className="pb-3 font-medium hidden sm:table-cell">URL/Query</th>
+                                        <th className="pb-3 font-medium hidden md:table-cell">Created</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    {recentJobs.length === 0 && (
+                                </thead>
+                                <tbody className="divide-y divide-border-subtle">
+                                    {recentJobs.map((job) => (
+                                        <tr key={job.job_id} className="hover:bg-surface-elevated/50 transition-colors">
+                                            <td className="py-3">
+                                                <span className="text-text-primary font-medium capitalize">
+                                                    {job.type.replace("_", " ")}
+                                                </span>
+                                            </td>
+                                            <td className="py-3">
+                                                <StatusBadge status={job.status as JobStatus} />
+                                            </td>
+                                            <td className="py-3 hidden sm:table-cell text-text-secondary text-xs font-mono truncate max-w-[200px]">
+                                                {job.url || job.query || job.job_id.slice(0, 12) + "..."}
+                                            </td>
+                                            <td className="py-3 hidden md:table-cell text-text-muted text-xs">
+                                                {formatDate(job.created_at)}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    ) : (
                         <div className="text-center py-12 text-text-muted">
                             <Briefcase size={32} className="mx-auto mb-3 opacity-50" />
-                            <p className="text-sm">No jobs yet. Start by running a request!</p>
+                            <p className="text-sm">No jobs yet. Start by running a request in the Playground!</p>
                         </div>
                     )}
                 </GlassCard>

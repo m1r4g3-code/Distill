@@ -245,3 +245,50 @@ export async function checkHealth(): Promise<{
 }> {
     return apiFetch("/health", { method: "GET" });
 }
+
+// ── User Jobs ──
+export interface UserJob {
+    job_id: string;
+    type: string;
+    status: string;
+    url?: string;
+    query?: string;
+    pages_discovered: number;
+    created_at: string;
+    completed_at?: string;
+}
+
+export async function fetchUserJobs(token: string): Promise<UserJob[]> {
+    return apiFetch<UserJob[]>("/api/v1/auth/jobs", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+    });
+}
+
+// ── User Usage ──
+export interface DailyPoint {
+    date: string;
+    requests: number;
+    success: number;
+}
+export interface EndpointStat {
+    endpoint: string;
+    count: number;
+}
+export interface UsageStats {
+    total_requests: number;
+    success_rate: number;
+    total_jobs: number;
+    pages_extracted: number;
+    cache_hits: number;
+    requests_over_time: DailyPoint[];
+    requests_by_endpoint: EndpointStat[];
+    top_urls: { url: string; count: number }[];
+}
+
+export async function fetchUserUsage(token: string, period = "7d"): Promise<UsageStats> {
+    return apiFetch<UsageStats>(`/api/v1/auth/usage?period=${period}`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+    });
+}

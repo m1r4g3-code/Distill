@@ -98,6 +98,20 @@ function PlaygroundContent() {
         };
     }, []);
 
+    // Restore last result from localStorage
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem("playground_last_result");
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (Date.now() - parsed.timestamp < 3_600_000) {
+                    setResponse(parsed.result);
+                    if (parsed.tab) setActiveTab(parsed.tab);
+                }
+            }
+        } catch { /* ignore */ }
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
     const handleTabChange = (tab: PlaygroundTab) => {
         setActiveTab(tab);
         setResponse(null);
@@ -130,6 +144,7 @@ function PlaygroundContent() {
                         try {
                             const results = await getJobResults(jobId, apiKey);
                             setResponse(results);
+                            try { localStorage.setItem("playground_last_result", JSON.stringify({ tab: activeTab, result: results, timestamp: Date.now() })); } catch { /* ignore */ }
                         } catch {
                             setResponse(status);
                         }
@@ -157,6 +172,7 @@ function PlaygroundContent() {
         setResponse(null);
         setPollingJobId(null);
         setPollingStatus("");
+        localStorage.removeItem("playground_last_result");
         const start = Date.now();
 
         try {
@@ -170,6 +186,7 @@ function PlaygroundContent() {
                     }, apiKey);
                     setDuration(Date.now() - start);
                     setResponse(result);
+                    try { localStorage.setItem("playground_last_result", JSON.stringify({ tab: activeTab, result, timestamp: Date.now() })); } catch { /* ignore */ }
                     setLoading(false);
                     break;
                 }
@@ -199,6 +216,7 @@ function PlaygroundContent() {
                     }, apiKey);
                     setDuration(Date.now() - start);
                     setResponse(result);
+                    try { localStorage.setItem("playground_last_result", JSON.stringify({ tab: activeTab, result, timestamp: Date.now() })); } catch { /* ignore */ }
                     setLoading(false);
                     break;
                 }
@@ -297,8 +315,8 @@ function PlaygroundContent() {
                         key={tab.id}
                         onClick={() => handleTabChange(tab.id)}
                         className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all duration-200 cursor-pointer border ${activeTab === tab.id
-                                ? "text-text-primary font-medium bg-surface border-border shadow-sm"
-                                : "text-text-muted hover:text-text-secondary border-transparent"
+                            ? "text-text-primary font-medium bg-surface border-border shadow-sm"
+                            : "text-text-muted hover:text-text-secondary border-transparent"
                             }`}
                     >
                         <tab.icon size={16} />

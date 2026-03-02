@@ -1,12 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useQuery } from "@tanstack/react-query";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { Skeleton } from "@/components/shared/Skeleton";
-import { useAppStore } from "@/lib/store";
-import { getJobStatus, getJobResults } from "@/lib/api-client";
+import { createSupabaseBrowserClient } from "@/lib/supabase";
+import { fetchUserJobs, getJobStatus, getJobResults } from "@/lib/api-client";
+import type { UserJob } from "@/lib/api-client";
 import type { JobStatusResponse, MapResultsResponse, ExtractionResultsResponse } from "@/types";
+import { useAppStore } from "@/lib/store";
 import { formatDate } from "@/lib/utils";
 import {
     ListTodo,
@@ -20,6 +23,7 @@ import {
     X,
     RefreshCw,
     ExternalLink,
+    FileText,
 } from "lucide-react";
 
 const statusConfig = {
@@ -34,68 +38,54 @@ const typeIcons: Record<string, React.ElementType> = {
     map: Globe,
     agent_extract: Bot,
     search_scrape: Search,
+    scrape: FileText,
 };
 
+async function getToken() {
+    const supabase = createSupabaseBrowserClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token ?? null;
+}
+
 export default function JobsPage() {
-    const { trackedJobs, apiKey, updateTrackedJob } = useAppStore();
+    const { apiKey } = useAppStore();
     const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
     const [jobDetail, setJobDetail] = useState<JobStatusResponse | null>(null);
     const [jobResults, setJobResults] = useState<MapResultsResponse | ExtractionResultsResponse | null>(null);
     const [loadingDetail, setLoadingDetail] = useState(false);
-    const [refreshing, setRefreshing] = useState(false);
     const [statusFilter, setStatusFilter] = useState<string>("all");
     const [typeFilter, setTypeFilter] = useState<string>("all");
 
-    const filteredJobs = trackedJobs.filter((j) => {
+    const { data: jobs = [], isLoading, isError, refetch, isFetching } = useQuery({
+        queryKey: ["jobs"],
+        queryFn: async (): Promise<UserJob[]> => {
+            const token = await getToken();
+            if (!token) return [];
+            return fetchUserJobs(token);
+        },
+        refetchInterval: 10_000,
+        staleTime: 5_000,
+    });
+
+    const filteredJobs = jobs.filter((j) => {
         if (statusFilter !== "all" && j.status !== statusFilter) return false;
         if (typeFilter !== "all" && j.type !== typeFilter) return false;
         return true;
     });
-
-    const refreshAllStatuses = useCallback(async () => {
-        if (!apiKey || trackedJobs.length === 0) return;
-        setRefreshing(true);
-        try {
-            await Promise.allSettled(
-                trackedJobs
-                    .filter((j) => j.status === "queued" || j.status === "running")
-                    .map(async (j) => {
-                        try {
-                            const status = await getJobStatus(j.jobId, apiKey);
-                            updateTrackedJob(j.jobId, { status: status.status });
-                        } catch {
-                            // Ignore individual failures
-                        }
-                    })
-            );
-        } finally {
-            setRefreshing(false);
-        }
-    }, [apiKey, trackedJobs, updateTrackedJob]);
-
-    // Auto-refresh active job statuses on mount
-    useEffect(() => {
-        refreshAllStatuses();
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleSelectJob = async (jobId: string) => {
         setSelectedJobId(jobId);
         setJobDetail(null);
         setJobResults(null);
         setLoadingDetail(true);
-
         try {
             const status = await getJobStatus(jobId, apiKey);
             setJobDetail(status);
-            updateTrackedJob(jobId, { status: status.status });
-
             if (status.status === "completed") {
                 try {
                     const results = await getJobResults(jobId, apiKey);
                     setJobResults(results);
-                } catch {
-                    // Results may not be available for all job types
-                }
+                } catch { /* Results may not be available */ }
             }
         } catch {
             setJobDetail(null);
@@ -108,39 +98,35 @@ export default function JobsPage() {
         <div className="max-w-6xl mx-auto space-y-6">
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-text-primary">Jobs</h1>
-                <div className="flex items-center gap-3">
-                    <button
-                        onClick={refreshAllStatuses}
-                        disabled={refreshing}
-                        className="btn-ghost text-sm flex items-center gap-2 disabled:opacity-60"
-                    >
-                        <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
-                        Refresh
-                    </button>
-                </div>
+                <button
+                    onClick={() => refetch()}
+                    disabled={isFetching}
+                    className="btn-ghost text-sm flex items-center gap-2 disabled:opacity-60"
+                >
+                    <RefreshCw size={14} className={isFetching ? "animate-spin" : ""} />
+                    Refresh
+                </button>
             </div>
 
             {/* Filters */}
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
                 <div className="flex gap-1 p-0.5 rounded-lg bg-surface-elevated">
                     {["all", "queued", "running", "completed", "failed"].map((s) => (
                         <button
                             key={s}
                             onClick={() => setStatusFilter(s)}
-                            className={`px-3 py-1.5 rounded-md text-xs capitalize transition-colors cursor-pointer ${statusFilter === s ? "bg-surface text-text-primary shadow-sm" : "text-text-muted"
-                                }`}
+                            className={`px-3 py-1.5 rounded-md text-xs capitalize transition-colors cursor-pointer ${statusFilter === s ? "bg-surface text-text-primary shadow-sm" : "text-text-muted"}`}
                         >
                             {s}
                         </button>
                     ))}
                 </div>
                 <div className="flex gap-1 p-0.5 rounded-lg bg-surface-elevated">
-                    {["all", "map", "agent_extract", "search_scrape"].map((t) => (
+                    {["all", "map", "agent_extract", "search_scrape", "scrape"].map((t) => (
                         <button
                             key={t}
                             onClick={() => setTypeFilter(t)}
-                            className={`px-3 py-1.5 rounded-md text-xs capitalize transition-colors cursor-pointer ${typeFilter === t ? "bg-surface text-text-primary shadow-sm" : "text-text-muted"
-                                }`}
+                            className={`px-3 py-1.5 rounded-md text-xs capitalize transition-colors cursor-pointer ${typeFilter === t ? "bg-surface text-text-primary shadow-sm" : "text-text-muted"}`}
                         >
                             {t === "all" ? "All" : t.replace("_", " ")}
                         </button>
@@ -148,15 +134,36 @@ export default function JobsPage() {
                 </div>
             </div>
 
+            {/* Loading skeleton */}
+            {isLoading && (
+                <div className="space-y-2">
+                    {[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 w-full rounded-xl" />)}
+                </div>
+            )}
+
+            {/* Error */}
+            {isError && (
+                <GlassCard className="text-center py-12">
+                    <p className="text-error text-sm">Failed to load jobs</p>
+                    <button onClick={() => refetch()} className="btn-ghost text-sm mt-3">Retry</button>
+                </GlassCard>
+            )}
+
             {/* Empty state */}
-            {trackedJobs.length === 0 && (
+            {!isLoading && !isError && jobs.length === 0 && (
                 <GlassCard className="text-center py-16 space-y-4">
                     <ListTodo size={48} className="mx-auto text-text-muted opacity-40" />
                     <h2 className="text-lg font-semibold text-text-primary">No jobs yet</h2>
                     <p className="text-sm text-text-secondary max-w-md mx-auto">
-                        Jobs will appear here when you run Map or Agent Extract requests
-                        from the Playground.
+                        Jobs appear here when you run requests from the Playground.
                     </p>
+                </GlassCard>
+            )}
+
+            {/* Filter empty */}
+            {!isLoading && !isError && jobs.length > 0 && filteredJobs.length === 0 && (
+                <GlassCard className="text-center py-8">
+                    <p className="text-sm text-text-muted">No jobs match the selected filters.</p>
                 </GlassCard>
             )}
 
@@ -169,15 +176,10 @@ export default function JobsPage() {
                         const StatusIcon = cfg.icon;
 
                         return (
-                            <motion.div
-                                key={job.jobId}
-                                initial={{ opacity: 0, y: 8 }}
-                                animate={{ opacity: 1, y: 0 }}
-                            >
+                            <motion.div key={job.job_id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
                                 <button
-                                    onClick={() => handleSelectJob(job.jobId)}
-                                    className={`w-full text-left glass-card p-4 cursor-pointer transition-all duration-200 hover:border-accent/30 ${selectedJobId === job.jobId ? "!border-accent/40" : ""
-                                        }`}
+                                    onClick={() => handleSelectJob(job.job_id)}
+                                    className={`w-full text-left glass-card p-4 cursor-pointer transition-all duration-200 hover:border-accent/30 ${selectedJobId === job.job_id ? "!border-accent/40" : ""}`}
                                 >
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-3">
@@ -186,11 +188,14 @@ export default function JobsPage() {
                                             </div>
                                             <div>
                                                 <p className="text-sm font-medium text-text-primary font-mono">
-                                                    {job.jobId.slice(0, 12)}...
+                                                    {job.job_id.slice(0, 12)}...
                                                 </p>
                                                 <p className="text-xs text-text-muted capitalize">
                                                     {job.type.replace("_", " ")}
-                                                    {job.url && <> · {new URL(job.url).hostname}</>}
+                                                    {job.url && (() => {
+                                                        try { return <> · {new URL(job.url).hostname}</>; }
+                                                        catch { return <> · {job.url}</>; }
+                                                    })()}
                                                 </p>
                                             </div>
                                         </div>
@@ -199,7 +204,7 @@ export default function JobsPage() {
                                                 <StatusIcon size={12} className={job.status === "running" ? "animate-spin" : ""} />
                                                 {cfg.label}
                                             </span>
-                                            <span className="text-xs text-text-muted">{formatDate(job.createdAt)}</span>
+                                            <span className="text-xs text-text-muted">{formatDate(job.created_at)}</span>
                                         </div>
                                     </div>
                                 </button>
@@ -230,10 +235,7 @@ export default function JobsPage() {
                             <div className="p-6 space-y-6">
                                 <div className="flex items-center justify-between">
                                     <h2 className="text-lg font-semibold text-text-primary">Job Details</h2>
-                                    <button
-                                        onClick={() => setSelectedJobId(null)}
-                                        className="p-1.5 text-text-muted hover:text-text-secondary cursor-pointer"
-                                    >
+                                    <button onClick={() => setSelectedJobId(null)} className="p-1.5 text-text-muted hover:text-text-secondary cursor-pointer">
                                         <X size={18} />
                                     </button>
                                 </div>

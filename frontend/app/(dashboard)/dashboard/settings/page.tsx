@@ -6,7 +6,7 @@ import { useAppStore } from "@/lib/store";
 import { createSupabaseBrowserClient } from "@/lib/supabase";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { toast } from "sonner";
-import { User, Lock, AlertTriangle, Palette, Key } from "lucide-react";
+import { User, Lock, AlertTriangle, Palette } from "lucide-react";
 
 const fadeUp = {
     hidden: { opacity: 0, y: 20 },
@@ -54,7 +54,7 @@ function getPasswordStrength(pw: string): { level: number; label: string; color:
 }
 
 export default function SettingsPage() {
-    const { user, setUser, apiKey, setApiKey } = useAppStore();
+    const { user, setUser } = useAppStore();
     const [name, setName] = useState(user?.name || "");
     const [currentPassword, setCurrentPassword] = useState("");
     const [newPassword, setNewPassword] = useState("");
@@ -66,8 +66,6 @@ export default function SettingsPage() {
     const [theme, setTheme] = useState("dark");
     const [notifyEmail, setNotifyEmail] = useState(true);
     const [notifyJobComplete, setNotifyJobComplete] = useState(true);
-    const [localApiKey, setLocalApiKey] = useState(apiKey);
-    const [isSavingKeys, setIsSavingKeys] = useState(false);
 
     const passwordStrength = useMemo(() => getPasswordStrength(newPassword), [newPassword]);
 
@@ -117,12 +115,7 @@ export default function SettingsPage() {
         }
     };
 
-    const handleSaveKeys = () => {
-        setIsSavingKeys(true);
-        setApiKey(localApiKey);
-        toast.success("API Key updated");
-        setIsSavingKeys(false);
-    };
+
 
     const inputCls = "w-full px-4 py-3 rounded-lg text-sm text-text-primary outline-none transition-all duration-150 bg-glass-bg border border-glass-border focus:border-accent focus:ring-2 focus:ring-accent/10";
 
@@ -158,18 +151,7 @@ export default function SettingsPage() {
                 </div>
             </GlassSection>
 
-            {/* API Keys */}
-            <GlassSection title="API Keys" icon={Key} custom={1}>
-                <div className="space-y-4">
-                    <div className="space-y-1.5">
-                        <label className="text-sm font-medium text-text-secondary">API Key (X-API-Key)</label>
-                        <input type="password" value={localApiKey} onChange={(e) => setLocalApiKey(e.target.value)} placeholder="sk_..." className={`${inputCls} font-mono`} />
-                    </div>
-                    <button onClick={handleSaveKeys} disabled={isSavingKeys} className="btn-ghost py-2.5 px-6 rounded-lg text-sm font-medium">
-                        {isSavingKeys ? <LoadingSpinner size="small" /> : "Update key"}
-                    </button>
-                </div>
-            </GlassSection>
+
 
             {/* Password */}
             <GlassSection title="Change Password" icon={Lock} custom={2}>
