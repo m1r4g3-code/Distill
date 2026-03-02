@@ -320,18 +320,22 @@ async def get_user_usage(
         for r in by_type.all()
     ]
 
-    # Daily time series
-    daily = await session.execute(
+    # Daily time series — use text label in group_by to avoid ambiguity
+    from sqlalchemy import text as sa_text
+    trunc_expr = func.date_trunc("day", Job.created_at)
+    daily_subq = (
         select(
-            func.date_trunc("day", Job.created_at).label("day"),
+            trunc_expr.label("day"),
             func.count(Job.id).label("total"),
             func.sum(case((Job.status == "completed", 1), else_=0)).label("success"),
         )
         .where(Job.api_key_id.in_(key_ids))
         .where(Job.created_at >= since)
-        .group_by(func.date_trunc("day", Job.created_at))
-        .order_by(func.date_trunc("day", Job.created_at))
-    )
+        .group_by(trunc_expr)
+        .order_by(trunc_expr)
+    ).subquery()
+
+    daily = await session.execute(select(daily_subq))
     daily_rows = daily.all()
 
     # Fill in any missing days
@@ -346,20 +350,24 @@ async def get_user_usage(
         t, s = date_map.get(d, (0, 0))
         requests_over_time.append(DailyPoint(date=d, requests=t, success=s))
 
-    # Top URLs from job input_params
-    top_urls_result = await session.execute(
-        select(Job.input_params, func.count(Job.id).label("cnt"))
+    # Top URLs — fetch input_params rows and aggregate URL counts in Python
+    # (avoids JSONB GROUP BY which fails in PostgreSQL)
+    url_rows_result = await session.execute(
+        select(Job.input_params)
         .where(Job.api_key_id.in_(key_ids))
         .where(Job.created_at >= since)
-        .group_by(Job.input_params)
-        .order_by(func.count(Job.id).desc())
-        .limit(5)
+        .where(Job.input_params.isnot(None))
     )
-    top_urls = []
-    for r in top_urls_result.all():
-        url = (r.input_params or {}).get("url")
+    url_counts: dict[str, int] = {}
+    for (params,) in url_rows_result.all():
+        url = (params or {}).get("url")
         if url:
-            top_urls.append({"url": url, "count": r.cnt})
+            url_counts[url] = url_counts.get(url, 0) + 1
+
+    top_urls = [
+        {"url": url, "count": count}
+        for url, count in sorted(url_counts.items(), key=lambda x: -x[1])[:5]
+    ]
 
     return UsageStats(
         total_requests=total_jobs,
