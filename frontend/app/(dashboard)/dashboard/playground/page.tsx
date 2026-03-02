@@ -57,25 +57,64 @@ export default function PlaygroundPage() {
     );
 }
 
+// ─── Per-tab state ────────────────────────────────────────────────────────────
+type TabState = {
+    isRunning: boolean;
+    result: Record<string, unknown> | null;
+    error: string | null;
+    duration: number;
+    pollingJobId: string | null;
+    pollingStatus: string;
+};
+
+const EMPTY_TAB: TabState = {
+    isRunning: false, result: null, error: null,
+    duration: 0, pollingJobId: null, pollingStatus: "",
+};
+
+const LS_KEY = "playground_results_v2";
+const ONE_HOUR = 3_600_000;
+
+function loadSaved(): Record<string, { result: Record<string, unknown>; timestamp: number }> {
+    try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch { return {}; }
+}
+function saveTab(tab: string, result: Record<string, unknown>) {
+    try {
+        const all = loadSaved();
+        all[tab] = { result, timestamp: Date.now() };
+        localStorage.setItem(LS_KEY, JSON.stringify(all));
+    } catch { /* ignore */ }
+}
+function clearTab(tab: string) {
+    try {
+        const all = loadSaved();
+        delete all[tab];
+        localStorage.setItem(LS_KEY, JSON.stringify(all));
+    } catch { /* ignore */ }
+}
+
 function PlaygroundContent() {
     const searchParams = useSearchParams();
     const initialTab = (searchParams.get("tab") as PlaygroundTab) || "scrape";
     const [activeTab, setActiveTab] = useState<PlaygroundTab>(initialTab);
-    const [loading, setLoading] = useState(false);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const [response, setResponse] = useState<Record<string, any> | null>(null);
+
+    const [tabStates, setTabStates] = useState<Record<string, TabState>>({
+        scrape: { ...EMPTY_TAB },
+        map: { ...EMPTY_TAB },
+        search: { ...EMPTY_TAB },
+        agent: { ...EMPTY_TAB },
+    });
+    const abortRefs = useRef<Record<string, AbortController>>({});
+    const pollingTimers = useRef<Record<string, ReturnType<typeof setInterval>>>({});
+
     const [responseView, setResponseView] = useState<"markdown" | "json" | "raw">("json");
     const [copied, setCopied] = useState(false);
     const [codeLang, setCodeLang] = useState<"curl" | "python" | "javascript">("curl");
     const [codeCopied, setCodeCopied] = useState(false);
-    const [duration, setDuration] = useState(0);
-    const [pollingJobId, setPollingJobId] = useState<string | null>(null);
-    const [pollingStatus, setPollingStatus] = useState<string>("");
-    const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const { apiKey, addTrackedJob, updateTrackedJob } = useAppStore();
 
-    // Form states
+    // ── Form states ────────────────────────────────────────────────────────────
     const [url, setUrl] = useState("https://example.com");
     const [usePlaywright, setUsePlaywright] = useState("auto");
     const [includeLinks, setIncludeLinks] = useState(false);
@@ -91,93 +130,105 @@ function PlaygroundContent() {
     const [schema, setSchema] = useState("");
     const [agentPlaywright, setAgentPlaywright] = useState("auto");
 
-    // Cleanup polling on unmount
+    // Restore saved results on mount (per-tab)
+    useEffect(() => {
+        const saved = loadSaved();
+        setTabStates(prev => {
+            const next = { ...prev };
+            for (const [tab, data] of Object.entries(saved)) {
+                if (Date.now() - data.timestamp < ONE_HOUR && tab in next) {
+                    next[tab] = { ...EMPTY_TAB, result: data.result };
+                }
+            }
+            return next;
+        });
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Cleanup all timers/controllers on unmount
     useEffect(() => {
         return () => {
-            if (pollingRef.current) clearInterval(pollingRef.current);
+            Object.values(pollingTimers.current).forEach(clearInterval);
+            Object.values(abortRefs.current).forEach(c => c.abort());
         };
     }, []);
 
-    // Restore last result from localStorage
-    useEffect(() => {
-        try {
-            const saved = localStorage.getItem("playground_last_result");
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                if (Date.now() - parsed.timestamp < 3_600_000) {
-                    setResponse(parsed.result);
-                    if (parsed.tab) setActiveTab(parsed.tab);
-                }
-            }
-        } catch { /* ignore */ }
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    const updateTab = useCallback((tab: string, update: Partial<TabState>) => {
+        setTabStates(prev => ({ ...prev, [tab]: { ...prev[tab], ...update } }));
+    }, []);
 
-    const handleTabChange = (tab: PlaygroundTab) => {
-        setActiveTab(tab);
-        setResponse(null);
-        setLoading(false);       // ← cancel any in-flight loading state
-        setPollingJobId(null);
-        setPollingStatus("");
-        if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
+    const cancelTab = useCallback((tab: string) => {
+        abortRefs.current[tab]?.abort();
+        delete abortRefs.current[tab];
+        if (pollingTimers.current[tab]) {
+            clearInterval(pollingTimers.current[tab]);
+            delete pollingTimers.current[tab];
         }
-    };
+        updateTab(tab, { isRunning: false, pollingJobId: null, pollingStatus: "" });
+    }, [updateTab]);
 
-    const startPolling = useCallback((jobId: string) => {
-        setPollingJobId(jobId);
-        setPollingStatus("queued");
+    // Tab switch NEVER cancels/resets other tabs
+    const handleTabChange = (tab: PlaygroundTab) => setActiveTab(tab);
 
-        pollingRef.current = setInterval(async () => {
+    const startPolling = useCallback((tab: string, jobId: string, controller: AbortController) => {
+        updateTab(tab, { pollingJobId: jobId, pollingStatus: "queued" });
+
+        pollingTimers.current[tab] = setInterval(async () => {
+            if (controller.signal.aborted) {
+                clearInterval(pollingTimers.current[tab]);
+                delete pollingTimers.current[tab];
+                return;
+            }
             try {
                 const status = await getJobStatus(jobId, apiKey);
-                setPollingStatus(status.status);
+                updateTab(tab, { pollingStatus: status.status });
                 updateTrackedJob(jobId, { status: status.status });
 
                 if (status.status === "completed" || status.status === "failed") {
-                    if (pollingRef.current) {
-                        clearInterval(pollingRef.current);
-                        pollingRef.current = null;
-                    }
-                    setLoading(false);
+                    clearInterval(pollingTimers.current[tab]);
+                    delete pollingTimers.current[tab];
+                    delete abortRefs.current[tab];
 
                     if (status.status === "completed") {
                         try {
                             const results = await getJobResults(jobId, apiKey);
-                            setResponse(results);
-                            try { localStorage.setItem("playground_last_result", JSON.stringify({ tab: activeTab, result: results, timestamp: Date.now() })); } catch { /* ignore */ }
+                            const r = results as unknown as Record<string, unknown>;
+                            updateTab(tab, { isRunning: false, result: r, pollingJobId: null });
+                            saveTab(tab, r);
                         } catch {
-                            setResponse(status);
+                            const fallback = status as unknown as Record<string, unknown>;
+                            updateTab(tab, { isRunning: false, result: fallback, pollingJobId: null });
                         }
                     } else {
-                        setResponse({
-                            error: status.error?.message || "Job failed",
-                            code: status.error?.code || "JOB_FAILED",
+                        updateTab(tab, {
+                            isRunning: false,
+                            error: (status.error as { message?: string })?.message || "Job failed",
+                            pollingJobId: null,
                         });
                     }
                 }
             } catch (err) {
-                // Don't stop polling on transient errors
                 console.error("Polling error:", err);
             }
-        }, 2000);
-    }, [apiKey, updateTrackedJob]);
+        }, 3000);
+    }, [apiKey, updateTab, updateTrackedJob]);
 
     const handleSubmit = async () => {
         if (!apiKey) {
-            toast.error("No API key set. Please enter your API key.");
+            toast.error("No API key set. Go to API Keys to create one.");
             return;
         }
 
-        setLoading(true);
-        setResponse(null);
-        setPollingJobId(null);
-        setPollingStatus("");
-        localStorage.removeItem("playground_last_result");
+        const tab = activeTab;
+        cancelTab(tab);
+        clearTab(tab);
+
+        const controller = new AbortController();
+        abortRefs.current[tab] = controller;
+        updateTab(tab, { isRunning: true, error: null, result: null, pollingJobId: null, pollingStatus: "" });
         const start = Date.now();
 
         try {
-            switch (activeTab) {
+            switch (tab) {
                 case "scrape": {
                     const result = await scrapeUrl({
                         url,
@@ -185,10 +236,10 @@ function PlaygroundContent() {
                         include_links: includeLinks,
                         respect_robots: respectRobots,
                     }, apiKey);
-                    setDuration(Date.now() - start);
-                    setResponse(result);
-                    try { localStorage.setItem("playground_last_result", JSON.stringify({ tab: activeTab, result, timestamp: Date.now() })); } catch { /* ignore */ }
-                    setLoading(false);
+                    if (controller.signal.aborted) return;
+                    const r = result as unknown as Record<string, unknown>;
+                    updateTab(tab, { isRunning: false, result: r, duration: Date.now() - start });
+                    saveTab(tab, r);
                     break;
                 }
                 case "map": {
@@ -198,70 +249,58 @@ function PlaygroundContent() {
                         max_pages: maxPages,
                         respect_robots: respectRobots,
                     }, apiKey);
-                    setDuration(Date.now() - start);
-                    addTrackedJob({
-                        jobId: result.job_id,
-                        type: "map",
-                        status: result.status,
-                        createdAt: new Date().toISOString(),
-                        url,
-                    });
+                    if (controller.signal.aborted) return;
+                    updateTab(tab, { duration: Date.now() - start });
+                    addTrackedJob({ jobId: result.job_id, type: "map", status: result.status, createdAt: new Date().toISOString(), url });
                     toast.success(`Map job started: ${result.job_id.slice(0, 8)}...`);
-                    startPolling(result.job_id);
+                    startPolling(tab, result.job_id, controller);
                     break;
                 }
                 case "search": {
-                    const result = await searchWeb({
-                        query,
-                        num_results: numResults,
-                    }, apiKey);
-                    setDuration(Date.now() - start);
-                    setResponse(result);
-                    try { localStorage.setItem("playground_last_result", JSON.stringify({ tab: activeTab, result, timestamp: Date.now() })); } catch { /* ignore */ }
-                    setLoading(false);
+                    const result = await searchWeb({ query, num_results: numResults }, apiKey);
+                    if (controller.signal.aborted) return;
+                    const r = result as unknown as Record<string, unknown>;
+                    updateTab(tab, { isRunning: false, result: r, duration: Date.now() - start });
+                    saveTab(tab, r);
                     break;
                 }
                 case "agent": {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const params: Parameters<typeof agentExtract>[0] = {
                         url,
                         prompt,
                         use_playwright: agentPlaywright as "auto" | "always" | "never",
                     };
                     if (schema.trim()) {
-                        try {
-                            params.schema_definition = JSON.parse(schema);
-                        } catch {
-                            toast.error("Invalid JSON schema");
-                            setLoading(false);
-                            return;
-                        }
+                        try { params.schema_definition = JSON.parse(schema); }
+                        catch { toast.error("Invalid JSON schema"); updateTab(tab, { isRunning: false }); return; }
                     }
                     const result = await agentExtract(params, apiKey);
-                    setDuration(Date.now() - start);
-                    addTrackedJob({
-                        jobId: result.job_id,
-                        type: "agent_extract",
-                        status: result.status,
-                        createdAt: new Date().toISOString(),
-                        url,
-                    });
+                    if (controller.signal.aborted) return;
+                    updateTab(tab, { duration: Date.now() - start });
+                    addTrackedJob({ jobId: result.job_id, type: "agent_extract", status: result.status, createdAt: new Date().toISOString(), url });
                     toast.success(`Agent job started: ${result.job_id.slice(0, 8)}...`);
-                    startPolling(result.job_id);
+                    startPolling(tab, result.job_id, controller);
                     break;
                 }
             }
         } catch (err) {
-            setDuration(Date.now() - start);
-            setResponse({
+            if (controller.signal.aborted) return;
+            updateTab(tab, {
+                isRunning: false,
                 error: err instanceof Error ? err.message : "Unknown error",
-                code: (err as { code?: string })?.code || "UNKNOWN",
+                duration: Date.now() - start,
             });
-            setLoading(false);
         }
     };
 
+    const cur = tabStates[activeTab];
+    const hasError = cur.result && "error" in cur.result;
+    const hasMarkdown = cur.result && "markdown" in cur.result;
+    const isPolling = cur.isRunning && !!cur.pollingJobId;
+
     const handleCopyResponse = () => {
-        navigator.clipboard.writeText(JSON.stringify(response, null, 2));
+        navigator.clipboard.writeText(JSON.stringify(cur.result, null, 2));
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
     };
@@ -303,10 +342,6 @@ function PlaygroundContent() {
         return `const response = await fetch("${baseUrl}/api/v1/agent/extract", {\n  method: "POST",\n  headers: {\n    "X-API-Key": "YOUR_API_KEY",\n    "Content-Type": "application/json"\n  },\n  body: JSON.stringify({\n    url: "${url}",\n    prompt: "${prompt}",\n    use_playwright: "${agentPlaywright}"\n  })\n});\nconst job = await response.json();`;
     };
 
-    const hasError = response && "error" in response;
-    const hasMarkdown = response && "markdown" in response;
-    const isPolling = pollingJobId && loading;
-
     return (
         <div className="flex flex-col" style={{ height: "calc(100vh - 64px)" }}>
             {/* Tabs */}
@@ -322,6 +357,10 @@ function PlaygroundContent() {
                     >
                         <tab.icon size={16} />
                         {tab.label}
+                        {/* Activity dot on non-active running tabs */}
+                        {tab.id !== activeTab && tabStates[tab.id]?.isRunning && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+                        )}
                     </button>
                 ))}
             </div>
@@ -411,18 +450,28 @@ function PlaygroundContent() {
                         </motion.div>
                     </AnimatePresence>
 
-                    {/* Run button */}
-                    <button
-                        onClick={handleSubmit}
-                        disabled={loading}
-                        className="btn-neumorphic w-full py-3 rounded-lg text-sm font-semibold disabled:opacity-60 flex items-center justify-center gap-2"
-                    >
-                        {loading ? (<><LoadingSpinner size="small" /> Running...</>) : "Run"}
-                    </button>
+                    {/* Run / Cancel */}
+                    <div className="flex gap-2">
+                        <button
+                            onClick={handleSubmit}
+                            disabled={cur.isRunning}
+                            className="btn-neumorphic flex-1 py-3 rounded-lg text-sm font-semibold disabled:opacity-60 flex items-center justify-center gap-2"
+                        >
+                            {cur.isRunning ? (<><LoadingSpinner size="small" /> Running...</>) : "Run"}
+                        </button>
+                        {cur.isRunning && (
+                            <button
+                                onClick={() => cancelTab(activeTab)}
+                                className="px-4 py-3 rounded-lg text-sm font-semibold border border-border text-text-muted hover:text-error hover:border-error transition-colors cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                        )}
+                    </div>
 
                     {(activeTab === "map" || activeTab === "agent") && (
                         <p className="text-xs text-text-muted italic">
-                            {activeTab === "map" ? "Map" : "Agent"} jobs are async — results will appear when complete
+                            {activeTab === "map" ? "Map" : "Agent"} jobs run in the background — you can switch tabs while waiting.
                         </p>
                     )}
 
@@ -453,7 +502,7 @@ function PlaygroundContent() {
 
                 {/* Right Panel — Response */}
                 <div className="w-[55%] overflow-y-auto flex flex-col bg-background">
-                    {!loading && !response && !isPolling && (
+                    {!cur.isRunning && !cur.result && !cur.error && (
                         <div className="flex-1 flex items-center justify-center">
                             <div className="text-center space-y-3">
                                 <Terminal size={48} className="mx-auto text-text-muted opacity-40" />
@@ -462,17 +511,15 @@ function PlaygroundContent() {
                             </div>
                         </div>
                     )}
-                    {loading && !response && (
+                    {cur.isRunning && !cur.result && (
                         <div className="flex-1 flex items-center justify-center">
                             <div className="text-center space-y-3">
                                 <LoadingSpinner size="large" className="mx-auto" />
                                 {isPolling ? (
                                     <>
-                                        <p className="text-sm text-text-secondary font-medium">
-                                            Job running...
-                                        </p>
+                                        <p className="text-sm text-text-secondary font-medium">Job running...</p>
                                         <p className="text-xs text-text-muted font-mono">
-                                            {pollingJobId?.slice(0, 12)}... — {pollingStatus}
+                                            {cur.pollingJobId?.slice(0, 12)}... — {cur.pollingStatus}
                                         </p>
                                     </>
                                 ) : (
@@ -481,7 +528,18 @@ function PlaygroundContent() {
                             </div>
                         </div>
                     )}
-                    {!loading && response && (
+                    {cur.error && !cur.result && (
+                        <div className="flex-1 flex items-center justify-center p-6">
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-2 text-error">
+                                    <AlertCircle size={16} />
+                                    <span className="text-sm font-medium">Error</span>
+                                </div>
+                                <p className="text-sm text-text-secondary font-mono">{cur.error}</p>
+                            </div>
+                        </div>
+                    )}
+                    {!cur.isRunning && cur.result && (
                         <div className="flex flex-col flex-1">
                             <div className="flex items-center justify-between px-5 py-3 border-b border-border-subtle">
                                 <div className="flex items-center gap-2">
@@ -494,7 +552,7 @@ function PlaygroundContent() {
                                         <>
                                             <span className="w-2 h-2 rounded-full bg-success" />
                                             <span className="text-sm text-success font-medium">Success</span>
-                                            <span className="text-xs text-text-muted font-mono">{duration}ms</span>
+                                            {cur.duration > 0 && <span className="text-xs text-text-muted font-mono">{cur.duration}ms</span>}
                                         </>
                                     )}
                                 </div>
@@ -526,17 +584,16 @@ function PlaygroundContent() {
                                             <span className="text-sm font-medium">Error</span>
                                         </div>
                                         <p className="text-sm text-text-secondary font-mono">
-                                            {response.code && <span className="text-text-muted">[{response.code}] </span>}
-                                            {response.error}
+                                            {cur.result.code ? `[${String(cur.result.code)}] ` : ""}{String(cur.result.error)}
                                         </p>
                                     </div>
                                 ) : responseView === "markdown" && hasMarkdown ? (
                                     <div className="whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">
-                                        {(response as { markdown: string }).markdown}
+                                        {(cur.result as { markdown: string }).markdown}
                                     </div>
                                 ) : (
                                     <pre className="text-xs leading-relaxed text-text-secondary font-mono">
-                                        {JSON.stringify(response, null, 2)}
+                                        {JSON.stringify(cur.result, null, 2)}
                                     </pre>
                                 )}
                             </div>

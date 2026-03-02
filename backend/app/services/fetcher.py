@@ -54,12 +54,9 @@ async def fetch_httpx(url: str, timeout_ms: int) -> FetchResult:
         pool=10.0,
     )
 
-    proxies = None
+    proxy = None
     if settings.proxy_enabled and settings.proxy_url:
-        proxies = {
-            "http://": settings.proxy_url,
-            "https://": settings.proxy_url,
-        }
+        proxy = settings.proxy_url
         log.info("fetch.proxy_used", url=url, renderer="httpx")
 
     start = time.perf_counter()
@@ -67,7 +64,7 @@ async def fetch_httpx(url: str, timeout_ms: int) -> FetchResult:
         follow_redirects=True, 
         timeout=timeout, 
         headers=BROWSER_HEADERS,
-        proxies=proxies
+        proxy=proxy
     ) as client:
         resp = await client.get(url)
 
