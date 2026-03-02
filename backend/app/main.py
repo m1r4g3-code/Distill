@@ -13,6 +13,7 @@ from app.routers.scrape import router as scrape_router
 from app.routers.agent import router as agent_router
 from app.routers.metrics import router as metrics_router
 from app.routers.admin import router as admin_router
+from app.routers.auth import router as auth_router
 
 APP_VERSION = "1.3.1"
 
@@ -41,6 +42,10 @@ tags_metadata = [
         "name": "admin",
         "description": "Administrative endpoints for API key lifecycle management.",
     },
+    {
+        "name": "auth",
+        "description": "Authentication integrations and API key generation.",
+    },
 ]
 
 @asynccontextmanager
@@ -51,6 +56,11 @@ async def lifespan(app: FastAPI):
     # Create tables automatically on startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        
+        # Migrate existing api_keys table to add user_id
+        from sqlalchemy import text
+        await conn.execute(text("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS user_id VARCHAR"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)"))
         
     from app.tasks.cleanup import run_cleanup_loop
     task = asyncio.create_task(run_cleanup_loop())
@@ -151,6 +161,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router, prefix="/api/v1")
     app.include_router(search_router, prefix="/api/v1")
     app.include_router(agent_router, prefix="/api/v1")
+    app.include_router(auth_router, prefix="/api/v1/auth")
     app.include_router(admin_router, prefix="/api/v1/admin")
     app.include_router(metrics_router)  # No prefix for spec compliance
 

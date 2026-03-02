@@ -37,8 +37,10 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.0-flash"
     search_timeout: float = 10.0
-    
     admin_key: str = "change-me-admin-key"
+    
+    supabase_url: str | None = None
+    supabase_service_role_key: str | None = None
 
     default_rate_limit: int = 60
 

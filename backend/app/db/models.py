@@ -21,6 +21,7 @@ class ApiKey(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
 
 Index("idx_api_keys_hash", ApiKey.key_hash)
