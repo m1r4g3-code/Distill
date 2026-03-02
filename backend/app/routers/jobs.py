@@ -208,6 +208,13 @@ async def get_job_results(
             "type": job.type,
             "data": extraction.data
         }
+    elif job.type in {"scrape", "search"}:
+        # Sync jobs don't have stored results — they're instantly complete
+        return {
+            "job_id": str(jid),
+            "type": job.type,
+            "data": {"message": "Sync job — results were returned directly in the API response."}
+        }
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

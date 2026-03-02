@@ -115,6 +115,7 @@ function PlaygroundContent() {
     const handleTabChange = (tab: PlaygroundTab) => {
         setActiveTab(tab);
         setResponse(null);
+        setLoading(false);       // ← cancel any in-flight loading state
         setPollingJobId(null);
         setPollingStatus("");
         if (pollingRef.current) {

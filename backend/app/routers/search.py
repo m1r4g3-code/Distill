@@ -224,7 +224,25 @@ async def search_endpoint(
             message="Search results returned immediately. Poll /api/v1/search/results/task_id for scraped content."
         )
 
-    # Sync behavior (scrape_top_n = 0)
+    # Sync behavior (scrape_top_n = 0) — save a completed job row for visibility
+    try:
+        plain_job = await create_job(
+            session,
+            api_key_id=api_key.id,
+            job_type="search",
+            input_params={"query": body.query, "num_results": body.num_results},
+            idempotency_key=None,
+        )
+        from datetime import timezone as tz
+        from datetime import datetime as dt
+        now = dt.now(tz.utc)
+        plain_job.status = "completed"
+        plain_job.started_at = now
+        plain_job.completed_at = now
+        await session.commit()
+    except Exception:
+        pass
+
     return SearchResponse(query=body.query, results=out_results, request_id=request_id)
 
 

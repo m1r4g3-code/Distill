@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from urllib.parse import urlparse
 
 from app.config import settings
-from app.db.models import ApiKey, Page
+from app.db.models import ApiKey, Job, Page
 from app.db.session import get_session
 from app.dependencies import require_scope
 from app.middleware.logging import get_request_id
@@ -24,7 +24,7 @@ from app.services.extractor import (
 from app.services.fetcher import fetch_url
 from app.services.robots import is_allowed_by_robots_async
 from app.services.url_utils import SSRFBlockedError, compute_url_hash, normalize_url, validate_ssrf
-from app.services.job_runner import create_job, compute_idempotency_key
+from app.services.job_runner import create_job, compute_idempotency_key, start_job, complete_job
 from arq import create_pool
 from arq.connections import RedisSettings
 from fastapi.responses import JSONResponse
@@ -419,7 +419,25 @@ async def scrape(
         cache_layer="none",
         request_id=request_id,
     )
-    
+
+    # ── Save a completed Job row so this scrape appears on the Jobs page ──
+    try:
+        now = datetime.now(timezone.utc)
+        scrape_job = Job(
+            api_key_id=api_key.id,
+            type="scrape",
+            status="completed",
+            input_params={"url": normalized_url},
+            pages_discovered=1,
+            started_at=now,
+            completed_at=now,
+        )
+        session.add(scrape_job)
+        await session.commit()
+    except Exception:
+        # Never fail the scrape response over a job log error
+        pass
+
     # Store fetched entry in redis if acceptable
     if ttl_seconds > 0:
         await redis.setex(redis_cache_key, 600, final_resp.model_dump_json())
