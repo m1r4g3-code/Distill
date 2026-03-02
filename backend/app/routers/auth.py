@@ -49,6 +49,10 @@ async def verify_supabase_jwt(authorization: str | None) -> str:
             
         return user_id
 
+@router.options("/sync")
+async def sync_auth_options():
+    return {"message": "OK"}
+
 @router.post("/sync", response_model=SyncAuthResponse)
 async def sync_auth(
     authorization: str | None = Header(default=None),
@@ -116,6 +120,10 @@ async def list_user_keys(
         for k in keys
     ]
 
+
+@router.options("/keys")
+async def keys_options():
+    return {"message": "OK"}
 
 @router.post("/keys", response_model=ApiKeyCreateResponse)
 async def create_user_key(
