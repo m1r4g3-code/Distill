@@ -7,7 +7,8 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { Skeleton } from "@/components/shared/Skeleton";
 import { useAppStore } from "@/lib/store";
-import { listApiKeys, createApiKey, revokeApiKey } from "@/lib/api-client";
+import { createSupabaseBrowserClient } from "@/lib/supabase";
+import { listUserApiKeys, createUserApiKey, revokeUserApiKey } from "@/lib/api-client";
 import { formatDate, maskApiKey } from "@/lib/utils";
 import type { ApiKeyCreateResponse } from "@/types";
 import { toast } from "sonner";
@@ -38,13 +39,22 @@ export default function ApiKeysPage() {
     // Fetch keys
     const { data: keys = [], isLoading, isError, error } = useQuery({
         queryKey: ["api-keys"],
-        queryFn: () => listApiKeys(adminKey),
-        enabled: !!adminKey,
+        queryFn: async () => {
+            const supabase = createSupabaseBrowserClient();
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session?.access_token) throw new Error("Unauthenticated");
+            return listUserApiKeys(session.access_token);
+        }
     });
 
     // Create mutation
     const createMutation = useMutation({
-        mutationFn: (name: string) => createApiKey({ name: name || undefined }, adminKey),
+        mutationFn: async (name: string) => {
+            const supabase = createSupabaseBrowserClient();
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session?.access_token) throw new Error("Unauthenticated");
+            return createUserApiKey({ name: name || undefined }, session.access_token);
+        },
         onSuccess: (data) => {
             setCreatedKey(data);
             queryClient.invalidateQueries({ queryKey: ["api-keys"] });
@@ -57,7 +67,12 @@ export default function ApiKeysPage() {
 
     // Revoke mutation
     const revokeMutation = useMutation({
-        mutationFn: (keyId: string) => revokeApiKey(keyId, adminKey),
+        mutationFn: async (keyId: string) => {
+            const supabase = createSupabaseBrowserClient();
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session?.access_token) throw new Error("Unauthenticated");
+            return revokeUserApiKey(keyId, session.access_token);
+        },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["api-keys"] });
             setShowRevokeModal(null);
@@ -82,23 +97,6 @@ export default function ApiKeysPage() {
             return next;
         });
     };
-
-    // No admin key configured
-    if (!adminKey) {
-        return (
-            <div className="max-w-4xl mx-auto space-y-6">
-                <h1 className="text-2xl font-bold text-text-primary">API Keys</h1>
-                <GlassCard className="text-center py-12 space-y-4">
-                    <ShieldAlert size={48} className="mx-auto text-text-muted opacity-40" />
-                    <h2 className="text-lg font-semibold text-text-primary">Admin key required</h2>
-                    <p className="text-sm text-text-secondary max-w-md mx-auto">
-                        API key management requires an admin key. Enter your admin key in the API Key modal
-                        or in Settings to manage keys.
-                    </p>
-                </GlassCard>
-            </div>
-        );
-    }
 
     return (
         <div className="max-w-4xl mx-auto space-y-6">

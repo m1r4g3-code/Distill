@@ -207,6 +207,36 @@ export async function revokeApiKey(
     }, { adminKey });
 }
 
+// ── Auth Sync & User API Keys ──
+export async function syncAuth(token: string): Promise<{ key: ApiKeyCreateResponse | null; existing: boolean }> {
+    return apiFetch<{ key: ApiKeyCreateResponse | null; existing: boolean }>("/api/v1/auth/sync", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+    });
+}
+
+export async function listUserApiKeys(token: string): Promise<ApiKeyResponse[]> {
+    return apiFetch<ApiKeyResponse[]>("/api/v1/auth/keys", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` }
+    });
+}
+
+export async function createUserApiKey(params: ApiKeyCreate, token: string): Promise<ApiKeyCreateResponse> {
+    return apiFetch<ApiKeyCreateResponse>("/api/v1/auth/keys", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify(params),
+    });
+}
+
+export async function revokeUserApiKey(keyId: string, token: string): Promise<void> {
+    return apiFetch<void>(`/api/v1/auth/keys/${keyId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+    });
+}
+
 // ── Health ──
 export async function checkHealth(): Promise<{
     status: string;
