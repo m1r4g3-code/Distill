@@ -54,7 +54,7 @@ function getPasswordStrength(pw: string): { level: number; label: string; color:
 }
 
 export default function SettingsPage() {
-    const { user, setUser, apiKey, setApiKey, adminKey, setAdminKey } = useAppStore();
+    const { user, setUser, apiKey, setApiKey } = useAppStore();
     const [name, setName] = useState(user?.name || "");
     const [currentPassword, setCurrentPassword] = useState("");
     const [newPassword, setNewPassword] = useState("");
@@ -67,7 +67,7 @@ export default function SettingsPage() {
     const [notifyEmail, setNotifyEmail] = useState(true);
     const [notifyJobComplete, setNotifyJobComplete] = useState(true);
     const [localApiKey, setLocalApiKey] = useState(apiKey);
-    const [localAdminKey, setLocalAdminKey] = useState(adminKey);
+    const [isSavingKeys, setIsSavingKeys] = useState(false);
 
     const passwordStrength = useMemo(() => getPasswordStrength(newPassword), [newPassword]);
 
@@ -118,9 +118,10 @@ export default function SettingsPage() {
     };
 
     const handleSaveKeys = () => {
+        setIsSavingKeys(true);
         setApiKey(localApiKey);
-        setAdminKey(localAdminKey);
-        toast.success("Keys updated");
+        toast.success("API Key updated");
+        setIsSavingKeys(false);
     };
 
     const inputCls = "w-full px-4 py-3 rounded-lg text-sm text-text-primary outline-none transition-all duration-150 bg-glass-bg border border-glass-border focus:border-accent focus:ring-2 focus:ring-accent/10";
@@ -164,11 +165,9 @@ export default function SettingsPage() {
                         <label className="text-sm font-medium text-text-secondary">API Key (X-API-Key)</label>
                         <input type="password" value={localApiKey} onChange={(e) => setLocalApiKey(e.target.value)} placeholder="sk_..." className={`${inputCls} font-mono`} />
                     </div>
-                    <div className="space-y-1.5">
-                        <label className="text-sm font-medium text-text-secondary">Admin Key (X-Admin-Key)</label>
-                        <input type="password" value={localAdminKey} onChange={(e) => setLocalAdminKey(e.target.value)} placeholder="your-admin-key" className={`${inputCls} font-mono`} />
-                    </div>
-                    <button onClick={handleSaveKeys} className="btn-ghost py-2.5 px-6 rounded-lg text-sm font-medium">Update keys</button>
+                    <button onClick={handleSaveKeys} disabled={isSavingKeys} className="btn-ghost py-2.5 px-6 rounded-lg text-sm font-medium">
+                        {isSavingKeys ? <LoadingSpinner size="small" /> : "Update key"}
+                    </button>
                 </div>
             </GlassSection>
 
