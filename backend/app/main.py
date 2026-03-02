@@ -45,6 +45,13 @@ tags_metadata = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.db.session import engine
+    from app.db.models import Base
+    
+    # Create tables automatically on startup
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        
     from app.tasks.cleanup import run_cleanup_loop
     task = asyncio.create_task(run_cleanup_loop())
     yield
