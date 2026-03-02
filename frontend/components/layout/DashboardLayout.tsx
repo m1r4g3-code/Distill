@@ -5,7 +5,6 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { TopNav } from "@/components/layout/TopNav";
 import { BottomNav } from "@/components/layout/BottomNav";
 import { Providers } from "@/components/providers";
-import { ApiKeyModal } from "@/components/shared/ApiKeyModal";
 import { createSupabaseBrowserClient } from "@/lib/supabase";
 import { useAppStore } from "@/lib/store";
 import { syncAuth } from "@/lib/api-client";
@@ -55,7 +54,6 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
                     <main className="p-6 pb-24 lg:pb-6">{children}</main>
                 </div>
                 <BottomNav />
-                <ApiKeyModal />
             </div>
         </Providers>
     );
