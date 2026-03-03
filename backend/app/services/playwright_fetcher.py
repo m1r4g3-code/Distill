@@ -44,17 +44,24 @@ async def fetch_playwright(url: str, timeout_ms: int, pw_pool=None) -> FetchResu
                 # Block heavy asset types by extension to speed up load
                 await page.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,css}", lambda route: asyncio.create_task(route.abort()))
 
-                response = await page.goto(
-                    url,
-                    wait_until="domcontentloaded",
-                    timeout=min(int(settings.playwright_timeout * 1000), timeout_ms),
-                )
-
-                # Allow some JS rendering time after DOM is ready
-                await asyncio.sleep(2)
-                content = await page.content()
-                if response:
-                    raw_bytes = await response.body()
+                try:
+                    response = await page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=min(int(settings.playwright_timeout * 1000), timeout_ms),
+                    )
+                    if response is None:
+                        raise Exception("No response received")
+                    
+                    # Allow some JS rendering time after DOM is ready
+                    await page.wait_for_load_state('networkidle', timeout=10000)
+                    content = await page.content()
+                except Exception as e:
+                    # Fallback if networkidle times out or response is GC'd
+                    try:
+                        content = await page.content()
+                    except Exception as fallback_e:
+                        raise Exception(f"Playwright failed: {str(e)} -> fallback failed: {str(fallback_e)}")
         else:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(
@@ -63,10 +70,11 @@ async def fetch_playwright(url: str, timeout_ms: int, pw_pool=None) -> FetchResu
                         "--no-sandbox",
                         "--disable-setuid-sandbox",
                         "--disable-dev-shm-usage",
-                        "--disable-gpu",
+                        "--disable-accelerated-2d-canvas",
                         "--no-first-run",
                         "--no-zygote",
                         "--single-process",
+                        "--disable-gpu",
                     ],
                 )
 
@@ -95,17 +103,24 @@ async def fetch_playwright(url: str, timeout_ms: int, pw_pool=None) -> FetchResu
                 # Block heavy asset types by extension to speed up load
                 await page.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,css}", lambda route: asyncio.create_task(route.abort()))
 
-                response = await page.goto(
-                    url,
-                    wait_until="domcontentloaded",
-                    timeout=min(int(settings.playwright_timeout * 1000), timeout_ms),
-                )
-
-                # Allow some JS rendering time after DOM is ready
-                await asyncio.sleep(2)
-                content = await page.content()
-                if response:
-                    raw_bytes = await response.body()
+                try:
+                    response = await page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=min(int(settings.playwright_timeout * 1000), timeout_ms),
+                    )
+                    if response is None:
+                        raise Exception("No response received")
+                    
+                    # Allow some JS rendering time after DOM is ready
+                    await page.wait_for_load_state('networkidle', timeout=10000)
+                    content = await page.content()
+                except Exception as e:
+                    # Fallback if networkidle times out or response is GC'd
+                    try:
+                        content = await page.content()
+                    except Exception as fallback_e:
+                        raise Exception(f"Playwright failed: {str(e)} -> fallback failed: {str(fallback_e)}")
     except Exception as e:
         raise Exception(f"Playwright failed: {str(e)}")
 

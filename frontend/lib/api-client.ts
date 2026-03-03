@@ -157,6 +157,16 @@ export async function getJobStatus(
     }, { apiKey });
 }
 
+export async function getJob(
+    jobId: string,
+    apiKey: string
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any> {
+    return apiFetch<any>(`/api/v1/jobs/${jobId}`, {
+        method: "GET",
+    }, { apiKey });
+}
+
 export async function getJobResults(
     jobId: string,
     apiKey: string

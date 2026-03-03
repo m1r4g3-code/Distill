@@ -17,15 +17,7 @@ from app.services.fetcher import fetch_url
 from app.services.robots import is_allowed_by_robots_async
 from app.services.search_provider import SearchResult, search
 from app.services.url_utils import SSRFBlockedError, normalize_url, validate_ssrf
-from app.services.job_runner import (
-    create_job,
-    start_job,
-    complete_job,
-    fail_job,
-    compute_idempotency_key,
-    get_existing_job_by_idempotency,
-    run_in_background,
-)
+from app.db.job_helpers import save_job
 
 
 router = APIRouter(tags=["search"])
@@ -137,7 +129,10 @@ async def _background_scrape_search(job_id: uuid.UUID, search_results: list[Sear
             session.add(extraction)
             await complete_job(session, job)
         except Exception as e:
-            await fail_job(session, job, "SEARCH_SCRAPE_FAILED", str(e))
+            job.status = "failed"
+            job.error_message = str(e)
+            job.completed_at = datetime.now(timezone.utc)
+            await session.commit()
 
 
 @router.post(
@@ -202,18 +197,19 @@ async def search_endpoint(
                 message="Background scraping already in progress or completed."
             )
 
-        # Create job
-        job = await create_job(
-            session,
+        # Create job using job_helpers
+        job = await save_job(
+            session=session,
             api_key_id=api_key.id,
-            job_type="search_scrape",
-            input_params=params,
-            idempotency_key=idem
+            type="search_scrape",
+            status="queued",
+            input_params=params
         )
         
-        # Run background scrape
+        # Run background scrape in FastAPI background tasks since it's light
         top_results = results[:body.scrape_top_n]
-        run_in_background(job.id, _background_scrape_search(job.id, top_results, body.respect_robots))
+        import asyncio
+        asyncio.create_task(_background_scrape_search(job.id, top_results, body.respect_robots))
         
         return SearchResponse(
             query=body.query,
@@ -226,20 +222,15 @@ async def search_endpoint(
 
     # Sync behavior (scrape_top_n = 0) — save a completed job row for visibility
     try:
-        plain_job = await create_job(
-            session,
+        from app.db.job_helpers import save_job
+        await save_job(
+            session=session,
             api_key_id=api_key.id,
-            job_type="search",
+            type="search",
+            status="completed",
             input_params={"query": body.query, "num_results": body.num_results},
-            idempotency_key=None,
+            progress={"results": [r.model_dump() for r in out_results]}
         )
-        from datetime import timezone as tz
-        from datetime import datetime as dt
-        now = dt.now(tz.utc)
-        plain_job.status = "completed"
-        plain_job.started_at = now
-        plain_job.completed_at = now
-        await session.commit()
     except Exception:
         pass
 

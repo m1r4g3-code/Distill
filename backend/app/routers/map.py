@@ -14,15 +14,7 @@ from app.dependencies import require_scope
 from app.middleware.logging import get_request_id
 from app.services.crawler import MapConfig, crawl_site
 from app.services.url_utils import validate_ssrf
-from app.services.job_runner import (
-    complete_job,
-    compute_idempotency_key,
-    create_job,
-    get_existing_job_by_idempotency,
-    start_job,
-)
-from arq import create_pool
-from arq.connections import RedisSettings
+from app.db.job_helpers import save_job
 
 
 router = APIRouter(tags=["map"])
@@ -105,27 +97,13 @@ async def map_website(
             response.headers["X-Idempotency-Hit"] = "true"
             return MapResponse(job_id=str(existing.id), status=existing.status, request_id=request_id)
 
-    job = await create_job(
-        session,
+    job = await save_job(
+        session=session,
         api_key_id=api_key.id,
-        job_type="map",
-        input_params=params,
-        idempotency_key=idem,
+        type="map",
+        status="queued",
+        input_params=params
     )
-
-    cfg = MapConfig(
-        root_url=body.url,
-        max_depth=body.max_depth,
-        max_pages=body.max_pages,
-        include_patterns=body.include_patterns,
-        exclude_patterns=body.exclude_patterns,
-        concurrency=body.concurrency,
-        domain_delay_ms=settings.domain_delay_ms,
-        respect_robots=body.respect_robots,
-    )
-
-    redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-    await redis.enqueue_job("run_map_job", job.id)
 
     return MapResponse(job_id=str(job.id), status=job.status, request_id=request_id)
 
