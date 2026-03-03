@@ -111,6 +111,7 @@ def create_app() -> FastAPI:
             "https://distill-five.vercel.app",
             "https://distill-five-m1r4g3codes-projects.vercel.app",
             "https://distill.vercel.app",
+            "https://*.vercel.app",
         ],
         allow_credentials=True,
         allow_methods=["*"],
