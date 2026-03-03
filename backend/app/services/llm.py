@@ -8,43 +8,48 @@ class LLMExtractionError(Exception):
     pass
 
 async def extract_structured_data(
-    content: str, 
-    prompt: str, 
-    schema: Optional[Dict[str, Any]] = None
+    content: str,
+    prompt: str,
+    schema: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Uses Gemini to extract structured JSON from the provided content based on a prompt and optional schema.
+    Uses Gemini to extract structured JSON from the provided content
+    based on a prompt and optional schema.
     """
     if not settings.gemini_api_key:
         raise LLMExtractionError("GEMINI_API_KEY is not configured.")
 
     client = genai.Client(api_key=settings.gemini_api_key)
-    
+
     system_prompt = (
-        "You are an expert data extractor. You will be provided with webpage content in Markdown format. "
-        "Your goal is to extract specific information as requested by the user and return it in valid JSON format. "
-        "Do not include any preamble or explanation, only the JSON object."
+        "You are an expert data extractor. You will be provided with webpage content "
+        "in Markdown format. Extract the requested information and return ONLY a valid "
+        "JSON object — no preamble, no explanation, no markdown code fences."
     )
 
     if schema:
-        system_prompt += f"\n\nThe extracted data MUST strictly follow this JSON schema: {json.dumps(schema)}"
+        system_prompt += (
+            f"\n\nThe extracted data MUST strictly follow this JSON schema:\n"
+            f"{json.dumps(schema, indent=2)}"
+        )
 
-    user_input = f"User Request: {prompt}\n\nWebpage Content:\n{content}"
+    user_input = f"Task: {prompt}\n\nWebpage Content:\n{content}"
 
     try:
-        # Use generate_content with the new SDK patterns
         response = client.models.generate_content(
             model=settings.gemini_model,
             contents=user_input,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                response_mime_type="application/json"
-            )
+                response_mime_type="application/json",
+            ),
         )
-        
+
         if not response.text:
             raise LLMExtractionError("Gemini returned an empty response.")
-            
+
         return json.loads(response.text)
+    except json.JSONDecodeError as e:
+        raise LLMExtractionError(f"Gemini response was not valid JSON: {str(e)}")
     except Exception as e:
         raise LLMExtractionError(f"Failed to extract data using Gemini: {str(e)}")

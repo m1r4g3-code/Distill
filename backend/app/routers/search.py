@@ -12,8 +12,8 @@ from app.db.models import ApiKey, Job, Extraction
 from app.db.session import AsyncSessionLocal, get_session
 from app.dependencies import require_scope
 from app.middleware.logging import get_request_id
-from app.services.extractor import clean_html, extract_content, html_to_markdown
-from app.services.fetcher import fetch_url
+from app.services.browser import fetch_page
+from app.utils.text import sanitize_text
 from app.services.robots import is_allowed_by_robots_async
 from app.services.search_provider import SearchResult, search
 from app.services.url_utils import SSRFBlockedError, normalize_url, validate_ssrf
@@ -72,9 +72,9 @@ def _parse_title(html_text: str) -> str | None:
 
 async def _scrape_for_search(url: str, respect_robots: bool = False) -> ScrapedModel:
     try:
-        validate_ssrf(url)
-    except SSRFBlockedError as e:
-        return None  # Silently skip for search batch
+        await validate_ssrf(url)
+    except Exception:
+        return None  # Silently skip blocked URLs for search batch
 
     normalized = normalize_url(url)
 
@@ -84,12 +84,10 @@ async def _scrape_for_search(url: str, respect_robots: bool = False) -> ScrapedM
             return None
 
     try:
-        fetched = await fetch_url(normalized, timeout_ms=20000, use_playwright="auto")
-        raw_html = fetched.text
-        cleaned = clean_html(raw_html)
-        content_result = extract_content(cleaned)
-        markdown = html_to_markdown(content_result)
-        return ScrapedModel(markdown=markdown, title=_parse_title(raw_html))
+        page_data = await fetch_page(normalized, wait_for_idle=False, extra_wait_ms=1000)
+        markdown = sanitize_text(page_data["markdown"])[:5000]
+        title = page_data["metadata"].get("title")
+        return ScrapedModel(markdown=markdown, title=title)
     except Exception:
         return None
 
