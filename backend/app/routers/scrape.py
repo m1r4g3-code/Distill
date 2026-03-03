@@ -109,15 +109,16 @@ def _as_utc(dt: datetime) -> datetime:
 async def scrape(
     request: Request,
     body: ScrapeRequest,
+    no_cache: bool = False,
     api_key: ApiKey = Depends(require_scope("scrape")),
     session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ) -> ScrapeResponse:
     request_id = get_request_id()
 
-    # X-No-Cache header or force_refresh body field both bypass cache
+    # no_cache query param (?no_cache=true), X-No-Cache header, or force_refresh body all bypass cache
     no_cache_header = request.headers.get("X-No-Cache", "").lower() in ("true", "1", "yes")
-    force_refresh = body.force_refresh or no_cache_header
+    force_refresh = body.force_refresh or no_cache_header or no_cache
 
     try:
         await validate_ssrf(body.url)
@@ -227,8 +228,8 @@ async def scrape(
                     cache_layer="db",
                     request_id=request_id,
                 )
-                # Backfill Redis
-                await redis.setex(redis_cache_key, 600, resp.model_dump_json())
+                # Backfill Redis with 1-hour TTL
+                await redis.setex(redis_cache_key, 3600, resp.model_dump_json())
                 return resp
     else:
         # force_refresh: still load cached_page so we can update it
@@ -401,8 +402,9 @@ async def scrape(
     except Exception:
         pass  # Never fail the scrape response over a job log error
 
-    # ── Write to Redis cache ──
+    # ── Write to Redis cache (1 hour TTL) ──
     if ttl_seconds > 0:
-        await redis.setex(redis_cache_key, ttl_seconds, final_resp.model_dump_json())
+        redis_ttl = min(ttl_seconds, 3600)  # cap at 1 hour
+        await redis.setex(redis_cache_key, redis_ttl, final_resp.model_dump_json())
 
     return final_resp
