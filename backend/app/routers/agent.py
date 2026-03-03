@@ -13,6 +13,8 @@ from app.services.fetcher import fetch_url
 from app.services.robots import is_allowed_by_robots_async
 from app.services.extractor import clean_html, extract_content, html_to_markdown
 from app.services.llm import extract_structured_data
+from app.services.url_utils import validate_ssrf
+from app.services.job_runner import compute_idempotency_key, get_existing_job_by_idempotency
 from app.db.job_helpers import save_job
 
 router = APIRouter(tags=["agent"])

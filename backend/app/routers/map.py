@@ -14,6 +14,7 @@ from app.dependencies import require_scope
 from app.middleware.logging import get_request_id
 from app.services.crawler import MapConfig, crawl_site
 from app.services.url_utils import validate_ssrf
+from app.services.job_runner import compute_idempotency_key, get_existing_job_by_idempotency
 from app.db.job_helpers import save_job
 
 

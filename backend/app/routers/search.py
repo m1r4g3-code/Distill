@@ -17,7 +17,9 @@ from app.services.fetcher import fetch_url
 from app.services.robots import is_allowed_by_robots_async
 from app.services.search_provider import SearchResult, search
 from app.services.url_utils import SSRFBlockedError, normalize_url, validate_ssrf
+from app.services.job_runner import compute_idempotency_key, get_existing_job_by_idempotency, start_job, complete_job
 from app.db.job_helpers import save_job
+from datetime import datetime, timezone
 
 
 router = APIRouter(tags=["search"])
