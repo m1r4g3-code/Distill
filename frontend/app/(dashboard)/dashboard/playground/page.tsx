@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 import { useAppStore } from "@/lib/store";
-import { scrapeUrl, mapWebsite, searchWeb, agentExtract, getJobStatus, getJobResults } from "@/lib/api-client";
+import { scrapeUrl, mapWebsite, searchWeb, agentExtract, getJob } from "@/lib/api-client";
 import type { PlaygroundTab } from "@/types/ui";
 import { toast } from "sonner";
 import {
@@ -179,29 +179,23 @@ function PlaygroundContent() {
                 return;
             }
             try {
-                const status = await getJobStatus(jobId, apiKey);
-                updateTab(tab, { pollingStatus: status.status });
-                updateTrackedJob(jobId, { status: status.status });
+                const job = await getJob(jobId, apiKey);
+                updateTab(tab, { pollingStatus: job.status });
+                updateTrackedJob(jobId, { status: job.status });
 
-                if (status.status === "completed" || status.status === "failed") {
+                if (job.status === "completed" || job.status === "failed") {
                     clearInterval(pollingTimers.current[tab]);
                     delete pollingTimers.current[tab];
                     delete abortRefs.current[tab];
 
-                    if (status.status === "completed") {
-                        try {
-                            const results = await getJobResults(jobId, apiKey);
-                            const r = results as unknown as Record<string, unknown>;
-                            updateTab(tab, { isRunning: false, result: r, pollingJobId: null });
-                            saveTab(tab, r);
-                        } catch {
-                            const fallback = status as unknown as Record<string, unknown>;
-                            updateTab(tab, { isRunning: false, result: fallback, pollingJobId: null });
-                        }
+                    if (job.status === "completed") {
+                        const r = job.result_data || job.progress?.result || job.progress || {};
+                        updateTab(tab, { isRunning: false, result: r, pollingJobId: null });
+                        saveTab(tab, r);
                     } else {
                         updateTab(tab, {
                             isRunning: false,
-                            error: (status.error as { message?: string })?.message || "Job failed",
+                            error: job.error_message || "Job failed",
                             pollingJobId: null,
                         });
                     }

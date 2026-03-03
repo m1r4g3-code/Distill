@@ -62,8 +62,8 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS user_id VARCHAR"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)"))
         
-    from app.tasks.cleanup import run_cleanup_loop
-    task = asyncio.create_task(run_cleanup_loop())
+    from app.worker.sql_worker import start_worker
+    task = asyncio.create_task(start_worker())
     yield
     task.cancel()
 
@@ -186,37 +186,25 @@ def create_app() -> FastAPI:
                 await session.execute(text("SELECT 1"))
         except Exception as e:
             structlog.get_logger("app").error("health.db_engine_error", error=str(e))
-            db_status = "error"
-            overall_status = "degraded"
-
-        # Check Playwright / Chromium availability
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox", "--disable-gpu", "--single-process"]
-                )
-                await browser.close()
-        except Exception as e:
-            structlog.get_logger("app").error("health.playwright_error", error=str(e))
-            pw_status = "error"
+            db_status = f"error: {str(e)}"
             overall_status = "degraded"
 
         # Check Redis connection
-        if not await ping_redis():
-            structlog.get_logger("app").error("health.redis_error")
-            redis_status = "error"
+        try:
+            if not await ping_redis():
+                redis_status = "error"
+                overall_status = "degraded"
+        except Exception as e:
+            structlog.get_logger("app").error("health.redis_error", error=str(e))
+            redis_status = f"error: {str(e)}"
             overall_status = "degraded"
 
         return {
-            "status": overall_status,
+            "status": "ok" if overall_status == "ok" else "degraded",
+            "database": db_status,
+            "redis": redis_status,
             "version": APP_VERSION,
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "dependencies": {
-                "database": db_status,
-                "redis": redis_status,
-                "playwright": pw_status
-            }
         }
 
     return app

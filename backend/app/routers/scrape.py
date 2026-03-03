@@ -24,9 +24,7 @@ from app.services.extractor import (
 from app.services.fetcher import fetch_url
 from app.services.robots import is_allowed_by_robots_async
 from app.services.url_utils import SSRFBlockedError, compute_url_hash, normalize_url, validate_ssrf
-from app.services.job_runner import create_job, compute_idempotency_key, start_job, complete_job
-from arq import create_pool
-from arq.connections import RedisSettings
+from app.db.job_helpers import save_job
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from app.db_redis import get_redis
@@ -257,15 +255,13 @@ async def scrape(
     except httpx.TimeoutException:
         if body.timeout_ms >= 5000:
             # Fallback to ARQ background job for long tasks
-            job = await create_job(
-                session,
+            job = await save_job(
+                session=session,
                 api_key_id=api_key.id,
-                job_type="search_scrape",
-                input_params=body.model_dump(),
-                idempotency_key=compute_idempotency_key(api_key.id, "search_scrape", body.model_dump())
+                type="scrape",  # Using simple "scrape" type
+                status="queued",
+                input_params=body.model_dump()
             )
-            redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-            await redis.enqueue_job("run_scrape_job", job.id)
             return JSONResponse(
                 status_code=status.HTTP_202_ACCEPTED,
                 content={
@@ -422,18 +418,14 @@ async def scrape(
 
     # ── Save a completed Job row so this scrape appears on the Jobs page ──
     try:
-        now = datetime.now(timezone.utc)
-        scrape_job = Job(
+        await save_job(
+            session=session,
             api_key_id=api_key.id,
             type="scrape",
             status="completed",
             input_params={"url": normalized_url},
-            pages_discovered=1,
-            started_at=now,
-            completed_at=now,
+            progress={"result": final_resp.model_dump()}
         )
-        session.add(scrape_job)
-        await session.commit()
     except Exception:
         # Never fail the scrape response over a job log error
         pass

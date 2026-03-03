@@ -13,18 +13,7 @@ from app.services.fetcher import fetch_url
 from app.services.robots import is_allowed_by_robots_async
 from app.services.extractor import clean_html, extract_content, html_to_markdown
 from app.services.llm import extract_structured_data
-from app.services.job_runner import (
-    create_job,
-    start_job,
-    complete_job,
-    fail_job,
-    compute_idempotency_key,
-    get_existing_job_by_idempotency,
-)
-from app.services.url_utils import validate_ssrf, normalize_url
-from app.config import settings
-from arq import create_pool
-from arq.connections import RedisSettings
+from app.db.job_helpers import save_job
 
 router = APIRouter(tags=["agent"])
 
@@ -96,15 +85,12 @@ async def agent_extract(
             response.headers["X-Idempotency-Hit"] = "true"
             return AgentExtractResponse(job_id=str(existing.id), status=existing.status, request_id=request_id)
 
-    job = await create_job(
-        session,
+    job = await save_job(
+        session=session,
         api_key_id=api_key.id,
-        job_type="agent_extract",
-        input_params=params,
-        idempotency_key=idem,
+        type="agent_extract",
+        status="queued",
+        input_params=params
     )
-
-    redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
-    await redis.enqueue_job("run_agent_job", job.id)
     
     return AgentExtractResponse(job_id=str(job.id), status=job.status, request_id=request_id)
